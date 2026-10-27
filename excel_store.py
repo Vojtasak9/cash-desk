@@ -9,12 +9,15 @@ Sheets:
   DailySummary  - cash / QR / total per day (regenerated on every save)
   Settings      - IBAN, account name, currency, ...
 """
+import io
 import os
 import threading
-from datetime import datetime
+from datetime import date, datetime
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
+
+import blob_storage
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 XLSX_PATH = os.environ.get("CASH_DESK_FILE", os.path.join(DATA_DIR, "cash_desk.xlsx"))
@@ -75,10 +78,18 @@ def _new_workbook():
 
 
 def _load():
-    if not os.path.exists(XLSX_PATH):
-        os.makedirs(os.path.dirname(XLSX_PATH), exist_ok=True)
-        _save(_new_workbook())
-    wb = load_workbook(XLSX_PATH)
+    if blob_storage.enabled():
+        data = blob_storage.load_bytes()
+        if data is None:
+            wb = _new_workbook()
+            _save(wb)
+            return wb
+        wb = load_workbook(io.BytesIO(data))
+    else:
+        if not os.path.exists(XLSX_PATH):
+            os.makedirs(os.path.dirname(XLSX_PATH), exist_ok=True)
+            _save(_new_workbook())
+        wb = load_workbook(XLSX_PATH)
     # add sheets that may be missing in an older file
     for name, headers in SHEETS.items():
         if name not in wb.sheetnames:
@@ -89,10 +100,27 @@ def _load():
 
 
 def _save(wb):
+    if blob_storage.enabled():
+        buf = io.BytesIO()
+        wb.save(buf)
+        try:
+            blob_storage.save_bytes(buf.getvalue())
+        except OSError as e:
+            raise StoreError("Could not save to cloud storage (%s). Try again." % e)
+        return
     try:
         wb.save(XLSX_PATH)
     except PermissionError:
         raise StoreError("Cannot write the Excel file - close it in Excel and try again.")
+
+
+def workbook_bytes():
+    """The whole Excel file, for the Download button."""
+    with _lock:
+        wb = _load()
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def _rows(ws):
@@ -101,7 +129,11 @@ def _rows(ws):
     for row in ws.iter_rows(min_row=2, values_only=True):
         if all(v is None for v in row):
             continue
-        out.append(dict(zip(headers, row)))
+        r = dict(zip(headers, row))
+        # Excel turns dates typed by hand into real dates - keep them as YYYY-MM-DD text
+        if isinstance(r.get("Date"), (datetime, date)):
+            r["Date"] = r["Date"].strftime("%Y-%m-%d")
+        out.append(r)
     return out
 
 

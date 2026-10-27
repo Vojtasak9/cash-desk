@@ -31,7 +31,23 @@ A simple cash register that runs on your computer and keeps **all data in one Ex
 You can open the file in Excel at any time to look at it. Close it before selling if you are on Windows
 (Windows locks open files).
 
-## Run it
+## Online (Vercel) – use it on the iPad
+
+The app is deployed on Vercel. Open the link in Safari on the iPad, log in with the password, then
+tap **Share → Add to Home Screen** – it opens full screen like a normal app.
+
+On Vercel the Excel file is kept in **Vercel Blob** storage (private). Use **Receipts → Download Excel file**
+to get it. Settings on Vercel (Project → Settings → Environment Variables):
+
+| Variable | Meaning |
+|---|---|
+| `APP_PASSWORD` | password for the login screen |
+| `SECRET_KEY` | random string that signs the login cookie |
+| `BLOB_READ_WRITE_TOKEN` | added automatically when the Blob store is connected |
+
+Every push to `main` on GitHub deploys automatically.
+
+## Run it on your computer
 
 Needs Python 3.9+.
 

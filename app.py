@@ -1,21 +1,62 @@
+import hashlib
+import hmac
+import io
 import os
 import re
 import webbrowser
-from datetime import date
+from datetime import date, timedelta
 from threading import Timer
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file, session
 
 import excel_store as store
 import qr_payment
 
 app = Flask(__name__)
 
+# Optional password (set APP_PASSWORD on Vercel). Without it the app is open - fine on your own computer.
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+app.secret_key = os.environ.get("SECRET_KEY") or hashlib.sha256(("cash-desk:" + APP_PASSWORD).encode()).hexdigest()
+app.permanent_session_lifetime = timedelta(days=365)
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=bool(os.environ.get("VERCEL")))
+
+
+@app.before_request
+def require_login():
+    if not APP_PASSWORD or session.get("ok") or request.endpoint in ("login", "static"):
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify(error="Please log in again."), 401
+    return redirect("/login")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        if hmac.compare_digest(request.form.get("password", ""), APP_PASSWORD):
+            session.permanent = True
+            session["ok"] = True
+            return redirect("/")
+        error = "Wrong password"
+    return render_template("login.html", error=error)
+
+
+@app.get("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
 
 @app.errorhandler(store.StoreError)
 @app.errorhandler(ValueError)
 def handle_error(e):
     return jsonify(error=str(e)), 400
+
+
+@app.errorhandler(500)
+def handle_crash(e):
+    return jsonify(error="Something went wrong on the server. Try again."), 500
 
 
 @app.get("/")
@@ -26,7 +67,7 @@ def index():
 @app.get("/api/state")
 def state():
     return jsonify(products=store.list_products(), settings=store.get_settings(),
-                   next_receipt=store.next_receipt())
+                   next_receipt=store.next_receipt(), auth=bool(APP_PASSWORD))
 
 
 @app.post("/api/products")
@@ -102,8 +143,9 @@ def save_settings():
 
 @app.get("/download")
 def download():
-    store.get_settings()  # makes sure the file exists
-    return send_file(store.XLSX_PATH, as_attachment=True, download_name="cash_desk.xlsx")
+    return send_file(io.BytesIO(store.workbook_bytes()), as_attachment=True,
+                     download_name="cash_desk_%s.xlsx" % date.today().isoformat(),
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Cash Desk">
+<title>Cash Desk</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         font-family:-apple-system, system-ui, sans-serif; background:#f4f6fa; color:#1d2330; }
+  form { background:#fff; border:1px solid #e2e6ee; border-radius:14px; padding:28px; width:min(360px, 90vw); }
+  h1 { font-size:22px; margin:0 0 18px; }
+  input, button { width:100%; font-size:18px; padding:14px; border-radius:10px; box-sizing:border-box; }
+  input { border:1px solid #e2e6ee; margin-bottom:12px; }
+  button { border:0; background:#2f5597; color:#fff; touch-action:manipulation; }
+  p { color:#c0392b; margin:0 0 12px; }
+</style>
+</head>
+<body>
+<form method="post">
+  <h1>Cash Desk</h1>
+  {% if error %}<p>{{ error }}</p>{% endif %}
+  <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password">
+  <button>Log in</button>
+</form>
+</body>
+</html>
