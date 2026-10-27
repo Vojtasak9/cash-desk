@@ -1,7 +1,7 @@
 // Offline support: the app files are cached, so the cash desk works without internet.
 // Bump VERSION whenever app files change so iPads pick up the new version.
-const VERSION = "cash-desk-v1";
-const FILES = ["./", "index.html", "app.js", "manifest.webmanifest", "vendor/xlsx.full.min.js",
+const VERSION = "cash-desk-v2";
+const FILES = ["./", "index.html", "app.js", "manifest.webmanifest", "vendor/exceljs.min.js",
                "vendor/qrcode.min.js", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", e => {

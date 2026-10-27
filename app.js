@@ -9,14 +9,14 @@ const $$ = s => document.querySelectorAll(s);
 
 const DEFAULT_STATE = () => ({
   products: [
-    {id: 1, name: "Coffee", price: 45, stock: 100, active: true},
-    {id: 2, name: "Tea", price: 35, stock: 100, active: true},
-    {id: 3, name: "Croissant", price: 40, stock: 20, active: true},
+    {id: 1, name: "Řez", price: 20, stock: null, active: true},
+    {id: 2, name: "Koláček", price: 15, stock: null, active: true},
+    {id: 3, name: "Závin", price: 25, stock: null, active: true},
   ],
   payments: [],      // {receipt, date, time, items, total, method, received, change, status}
   paymentItems: [],  // {receipt, productId, name, qty, unitPrice, lineTotal}
   debts: [],         // {id, date, person, type: "Lent"|"Repaid", amount, note}
-  settings: {shop_name: "Cash desk", account_name: "", iban: "", currency: "CZK"},
+  settings: {shop_name: "Jarmark", account_name: "", iban: "", currency: "CZK"},
   lastExport: null,  // ISO time of the last Excel export
   changedSinceExport: false,
 });
@@ -133,7 +133,8 @@ function qrSvg(text) {
 // ---------------------------------------------------------------- business logic
 
 const receiptNumber = code => parseInt(String(code).replace(/\D/g, ""), 10) || 0;
-const formatReceipt = n => "P " + String(n).padStart(3, "0");
+const formatReceipt = n => "P" + String(n).padStart(3, "0");  // P001, P002, ... as in the Jarmark file
+const normalizeReceipt = code => formatReceipt(receiptNumber(code));
 const nextReceipt = () => formatReceipt(Math.max(0, ...state.payments.map(p => receiptNumber(p.receipt))) + 1);
 const productById = id => state.products.find(p => p.id === +id);
 
@@ -206,37 +207,149 @@ function debtTotals() {
 }
 
 // ---------------------------------------------------------------- Excel export / import
+// Layout follows the school "Jarmark" workbook: Czech sheet names, "Heading 1" headers, amounts in Kč.
 
-const SHEETS = {
-  Products: ["ID", "Name", "Price", "Stock", "Active"],
-  Payments: ["Receipt", "Date", "Time", "Items", "Total", "Method", "Received", "Change", "Status"],
-  PaymentItems: ["Receipt", "Product ID", "Name", "Qty", "Unit price", "Line total"],
-  Debts: ["ID", "Date", "Person", "Type", "Amount", "Note"],
-  DebtSummary: ["Person", "Lent", "Repaid", "Still owes"],
-  DailySummary: ["Date", "Receipts", "Cash", "QR", "Total"],
-  Settings: ["Key", "Value"],
+const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const DAY_NAMES = ["Neděle", "Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota"];
+const SH = {
+  sales: "Prodej", lines: "Evidence Prodeje", products: "Evidence Pokladny", receipts: "Účtenky",
+  days: "Denní uzávěrka", debts: "Dluhy", debtors: "Kdo dluží", settings: "Nastavení",
 };
+const METHOD_CZ = {Cash: "Hotově", QR: "QR"};
+
+const moneyFmt = () => (state.settings.currency || "CZK") === "CZK"
+  ? '#,##0.00 "Kč"' : `#,##0.00 "${state.settings.currency}"`;
+
+// Excel's "Heading 1" look used in the Jarmark file
+function heading(row) {
+  row.eachCell(c => {
+    c.font = {bold: true, size: 15, color: {argb: "FF44546A"}};
+    c.border = {bottom: {style: "thick", color: {argb: "FF4472C4"}}};
+  });
+}
+const bold = row => row.eachCell(c => { c.font = {bold: true}; });
+
+function addSheet(wb, name, headers, rows, {style = bold, widths = {}, money = []} = {}) {
+  const ws = wb.addWorksheet(name);
+  style(ws.addRow(headers));
+  rows.forEach(r => ws.addRow(r));
+  headers.forEach((h, i) => {
+    const col = ws.getColumn(i + 1);
+    col.width = widths[h] || Math.max(10, String(h).length + 3);
+    if (money.includes(h)) col.numFmt = moneyFmt();
+  });
+  ws.views = [{state: "frozen", ySplit: 1}];
+  return ws;
+}
+
+function dayLabels(dates) {
+  const count = {};
+  dates.forEach(d => { const n = new Date(d + "T12:00").getDay(); count[n] = (count[n] || 0) + 1; });
+  return dates.map(d => {
+    const dt = new Date(d + "T12:00");
+    const name = DAY_NAMES[dt.getDay()];
+    return (count[dt.getDay()] > 1 ? `${name} ${dt.getDate()}. ${dt.getMonth() + 1}.` : name) + " (ks)";
+  });
+}
 
 function buildWorkbook() {
-  const rows = {
-    Products: state.products.map(p => [p.id, p.name, p.price, p.stock ?? "", p.active ? "yes" : "no"]),
-    Payments: state.payments.map(p => [p.receipt, p.date, p.time, p.items, p.total, p.method, p.received ?? "", p.change ?? "", p.status]),
-    PaymentItems: state.paymentItems.map(i => [i.receipt, i.productId, i.name, i.qty, i.unitPrice, i.lineTotal]),
-    Debts: state.debts.map(d => [d.id, d.date, d.person, d.type, d.amount, d.note || ""]),
-    DebtSummary: debtTotals().map(d => [d.person, d.lent, d.repaid, d.owes]),
-    DailySummary: dailyTotals().map(d => [d.date, d.receipts, d.cash, d.qr, d.total]),
-    Settings: Object.entries(state.settings),
-  };
-  const wb = XLSX.utils.book_new();
-  for (const [name, headers] of Object.entries(SHEETS)) {
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows[name]]);
-    ws["!cols"] = headers.map(h => ({wch: h === "Items" ? 50 : Math.max(12, h.length + 4)}));
-    XLSX.utils.book_append_sheet(wb, ws, name);
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Cash Desk";
+  const ok = new Set(state.payments.filter(p => p.status !== "VOID").map(p => p.receipt));
+
+  // 1) Prodej - like "Prodej Propisek": pieces per product per sale day, with formulas
+  const dates = [...new Set(state.payments.filter(p => ok.has(p.receipt)).map(p => p.date))].sort();
+  const sold = {};  // name -> date -> qty
+  const dateOf = Object.fromEntries(state.payments.map(p => [p.receipt, p.date]));
+  for (const it of state.paymentItems) {
+    if (!ok.has(it.receipt)) continue;
+    const byDay = sold[it.name] ||= {};
+    byDay[dateOf[it.receipt]] = (byDay[dateOf[it.receipt]] || 0) + it.qty;
   }
+  const names = [...new Set([...state.products.map(p => p.name), ...Object.keys(sold)])];
+  const priceOf = name => {
+    const p = state.products.find(x => x.name === name);
+    if (p) return p.price;
+    const it = state.paymentItems.find(i => i.name === name);  // product was deleted since
+    return it ? it.unitPrice : 0;
+  };
+  const ws = wb.addWorksheet(SH.sales);
+  const nDays = dates.length;
+  heading(ws.addRow(["Druh zboží", "Cena za kus", ...dayLabels(dates), "Celkem (ks)", "Tržba za daný druh zboží", "Tržba celkem"]));
+  const col = i => ws.getColumn(i).letter;
+  const totalCol = 3 + nDays, revCol = totalCol + 1, grandCol = revCol + 1;
+  let grand = 0;
+  names.forEach((name, i) => {
+    const r = i + 2, price = priceOf(name);
+    const qtys = dates.map(d => (sold[name] || {})[d] || 0);
+    const qty = qtys.reduce((a, b) => a + b, 0);
+    grand += price * qty;
+    ws.addRow([name, price, ...qtys,
+      {formula: nDays ? `SUM(${col(3)}${r}:${col(2 + nDays)}${r})` : "0", result: qty},
+      {formula: `B${r}*${col(totalCol)}${r}`, result: round2(price * qty)}]);
+  });
+  if (names.length) ws.getCell(2, grandCol).value = {formula: `SUM(${col(revCol)}2:${col(revCol)}${names.length + 1})`, result: round2(grand)};
+  ws.getColumn(1).width = 18;
+  ws.getColumn(2).width = 14;
+  ws.getColumn(2).numFmt = moneyFmt();
+  for (let c = 3; c <= totalCol; c++) ws.getColumn(c).width = Math.max(14, String(ws.getCell(1, c).value).length + 4);
+  ws.getColumn(revCol).width = 30; ws.getColumn(revCol).numFmt = moneyFmt();
+  ws.getColumn(grandCol).width = 18; ws.getColumn(grandCol).numFmt = moneyFmt();
+
+  // 2) Evidence Prodeje - every receipt line (Číslo / Produkt / Počet as in the Jarmark file)
+  addSheet(wb, SH.lines, ["Číslo", "Produkt", "Počet", "Cena za kus", "Celkem", "Datum", "Stav"],
+    state.paymentItems.map(i => [i.receipt, i.name, i.qty, i.unitPrice, i.lineTotal, dateOf[i.receipt] || "",
+                                 ok.has(i.receipt) ? "" : "storno"]),
+    {style: () => {}, widths: {Produkt: 18}, money: ["Cena za kus", "Celkem"]});
+
+  // 3) Evidence Pokladny - product list with price and stock
+  addSheet(wb, SH.products, ["Produkty:", "Cena za kus", "Skladem", "V prodeji"],
+    state.products.map(p => [p.name, p.price, p.stock ?? "", p.active ? "ano" : "ne"]),
+    {style: () => {}, widths: {"Produkty:": 18}, money: ["Cena za kus"]});
+
+  // 4) Účtenky - one row per receipt with payment method
+  addSheet(wb, SH.receipts, ["Číslo", "Datum", "Čas", "Položky", "Částka", "Platba", "Přijato", "Vráceno", "Stav"],
+    state.payments.map(p => [p.receipt, p.date, p.time, p.items, p.total, METHOD_CZ[p.method] || p.method,
+                             p.received ?? "", p.change ?? "", p.status === "VOID" ? "storno" : "OK"]),
+    {style: heading, widths: {Položky: 45, Datum: 12}, money: ["Částka", "Přijato", "Vráceno"]});
+
+  // 5) Denní uzávěrka - totals per day with a sum row
+  const days = dailyTotals();
+  const dws = addSheet(wb, SH.days, ["Datum", "Den", "Účtenek", "Hotově", "QR", "Celkem"],
+    days.map(d => [d.date, DAY_NAMES[new Date(d.date + "T12:00").getDay()], d.receipts, d.cash, d.qr, d.total]),
+    {style: heading, widths: {Datum: 12, Den: 12}, money: ["Hotově", "QR", "Celkem"]});
+  if (days.length) {
+    const n = days.length + 1;
+    const sum = (c, v) => ({formula: `SUM(${c}2:${c}${n})`, result: v});
+    const tot = days.reduce((a, d) => ({r: a.r + d.receipts, c: a.c + d.cash, q: a.q + d.qr, t: a.t + d.total}), {r: 0, c: 0, q: 0, t: 0});
+    bold(dws.addRow(["Celkem", "", sum("C", tot.r), sum("D", round2(tot.c)), sum("E", round2(tot.q)), sum("F", round2(tot.t))]));
+  }
+
+  // 6) Dluhy + Kdo dluží
+  addSheet(wb, SH.debts, ["Datum", "Osoba", "Typ", "Částka", "Poznámka"],
+    state.debts.map(d => [d.date, d.person, d.type === "Lent" ? "Půjčeno" : "Vráceno", d.amount, d.note || ""]),
+    {style: heading, widths: {Datum: 12, Osoba: 18, Poznámka: 30}, money: ["Částka"]});
+  addSheet(wb, SH.debtors, ["Osoba", "Půjčeno", "Vráceno", "Ještě dluží"],
+    debtTotals().map(d => [d.person, d.lent, d.repaid, d.owes]),
+    {style: heading, widths: {Osoba: 18}, money: ["Půjčeno", "Vráceno", "Ještě dluží"]});
+
+  // 7) Nastavení - needed to load the file back into the app
+  addSheet(wb, SH.settings, ["Klíč", "Hodnota"], Object.entries(state.settings), {widths: {Hodnota: 30}});
   return wb;
 }
 
-const exportName = () => `cash_desk_${today()}.xlsx`;
+const exportName = () => `${(state.settings.shop_name || "Pokladna").replace(/[\\/:*?"<>|]/g, "")}_${today()}.xlsx`;
+let exportFile = null;
+
+async function prepareExport() {
+  exportFile = null;
+  $$("#exportShare, #exportDownload").forEach(b => b.disabled = true);
+  $("#exportName").textContent = "Preparing…";
+  const buf = await buildWorkbook().xlsx.writeBuffer();
+  exportFile = new File([buf], exportName(), {type: XLSX_TYPE});
+  $("#exportName").textContent = exportFile.name;
+  $$("#exportShare, #exportDownload").forEach(b => b.disabled = false);
+}
 
 async function markExported() {
   state.lastExport = new Date().toISOString();
@@ -246,16 +359,20 @@ async function markExported() {
 }
 
 function exportDownload() {
-  XLSX.writeFile(buildWorkbook(), exportName());
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(exportFile);
+  a.download = exportFile.name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
   markExported();
 }
 
+// The file is built before the tap, so the iPad share sheet opens straight from the tap
 async function exportShare() {
-  const data = XLSX.write(buildWorkbook(), {type: "array", bookType: "xlsx"});
-  const file = new File([data], exportName(), {type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-  if (navigator.canShare && navigator.canShare({files: [file]})) {
+  if (navigator.canShare && navigator.canShare({files: [exportFile]})) {
     try {
-      await navigator.share({files: [file], title: exportName()});
+      await navigator.share({files: [exportFile], title: exportFile.name});
       await markExported();
     } catch (e) {
       if (e.name !== "AbortError") toast("Sharing failed - use Download instead", true);
@@ -265,43 +382,72 @@ async function exportShare() {
   }
 }
 
+// ---- import
+
+function cellValue(v) {
+  if (v && typeof v === "object") {
+    if (v instanceof Date) return v;
+    if ("result" in v) return v.result;
+    if ("richText" in v) return v.richText.map(t => t.text).join("");
+    if ("text" in v) return v.text;
+  }
+  return v ?? "";
+}
 function cellDate(v) {
-  if (v instanceof Date) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
+  if (v instanceof Date) return `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())}`;
   return String(v ?? "");
 }
 function cellTime(v) {
-  if (v instanceof Date) return `${pad(v.getHours())}:${pad(v.getMinutes())}:${pad(v.getSeconds())}`;
+  if (v instanceof Date) return `${pad(v.getUTCHours())}:${pad(v.getUTCMinutes())}:${pad(v.getUTCSeconds())}`;
   return String(v ?? "");
 }
 const blankToNull = v => (v === "" || v == null) ? null : num(v);
 
+function sheetRows(wb, name, required = true) {
+  const ws = wb.getWorksheet(name);
+  if (!ws) {
+    if (required) throw new UserError(`This isn't a Cash Desk Excel file (sheet "${name}" is missing).`);
+    return [];
+  }
+  const headers = [];
+  ws.getRow(1).eachCell((c, i) => { headers[i] = String(cellValue(c.value)).trim(); });
+  const out = [];
+  ws.eachRow((row, n) => {
+    if (n === 1) return;
+    const r = {};
+    headers.forEach((h, i) => { if (h) r[h] = cellValue(row.getCell(i).value); });
+    if (Object.values(r).some(v => v !== "")) out.push(r);
+  });
+  return out;
+}
+
 async function importExcel(file) {
-  const wb = XLSX.read(await file.arrayBuffer(), {cellDates: true});
-  const sheet = name => {
-    const ws = wb.Sheets[name];
-    if (!ws) throw new UserError(`This isn't a Cash Desk Excel file (sheet "${name}" is missing).`);
-    return XLSX.utils.sheet_to_json(ws, {defval: ""});
-  };
+  const wb = new ExcelJS.Workbook();
+  try { await wb.xlsx.load(await file.arrayBuffer()); }
+  catch (e) { throw new UserError("Can't read this file - is it an .xlsx Excel file?"); }
   const next = DEFAULT_STATE();
-  next.products = sheet("Products").filter(r => r.Name !== "").map(r => ({
-    id: parseInt(r.ID, 10), name: String(r.Name), price: num(r.Price),
-    stock: r.Stock === "" ? null : Math.round(num(r.Stock)),
-    active: !["no", "false", "0"].includes(String(r.Active).toLowerCase()),
+  next.products = sheetRows(wb, SH.products).filter(r => r["Produkty:"] !== "").map((r, i) => ({
+    id: i + 1, name: String(r["Produkty:"]).trim(), price: num(r["Cena za kus"]),
+    stock: r.Skladem === "" || r.Skladem == null ? null : Math.round(num(r.Skladem)),
+    active: !["ne", "no", "false", "0"].includes(String(r["V prodeji"]).toLowerCase()),
   }));
-  next.payments = sheet("Payments").filter(r => r.Receipt !== "").map(r => ({
-    receipt: String(r.Receipt), date: cellDate(r.Date), time: cellTime(r.Time), items: String(r.Items),
-    total: num(r.Total), method: r.Method === "QR" ? "QR" : "Cash",
-    received: blankToNull(r.Received), change: blankToNull(r.Change), status: r.Status === "VOID" ? "VOID" : "OK",
+  const idOf = name => (next.products.find(p => p.name === name) || {}).id ?? null;
+  const fromCz = m => m === "QR" ? "QR" : "Cash";
+  next.payments = sheetRows(wb, SH.receipts).filter(r => r["Číslo"] !== "").map(r => ({
+    receipt: normalizeReceipt(r["Číslo"]), date: cellDate(r.Datum), time: cellTime(r["Čas"]),
+    items: String(r["Položky"]), total: num(r["Částka"]), method: fromCz(r.Platba),
+    received: blankToNull(r["Přijato"]), change: blankToNull(r["Vráceno"]),
+    status: String(r.Stav).toLowerCase() === "storno" ? "VOID" : "OK",
   }));
-  next.paymentItems = sheet("PaymentItems").filter(r => r.Receipt !== "").map(r => ({
-    receipt: String(r.Receipt), productId: parseInt(r["Product ID"], 10), name: String(r.Name),
-    qty: num(r.Qty), unitPrice: num(r["Unit price"]), lineTotal: num(r["Line total"]),
+  next.paymentItems = sheetRows(wb, SH.lines).filter(r => r["Číslo"] !== "").map(r => ({
+    receipt: normalizeReceipt(r["Číslo"]), productId: idOf(String(r.Produkt)), name: String(r.Produkt),
+    qty: num(r["Počet"]), unitPrice: num(r["Cena za kus"]), lineTotal: num(r.Celkem),
   }));
-  next.debts = sheet("Debts").filter(r => r.Person !== "").map(r => ({
-    id: parseInt(r.ID, 10), date: cellDate(r.Date), person: String(r.Person),
-    type: r.Type === "Repaid" ? "Repaid" : "Lent", amount: num(r.Amount), note: String(r.Note || ""),
+  next.debts = sheetRows(wb, SH.debts, false).filter(r => r.Osoba !== "").map((r, i) => ({
+    id: i + 1, date: cellDate(r.Datum), person: String(r.Osoba),
+    type: r.Typ === "Vráceno" ? "Repaid" : "Lent", amount: num(r["Částka"]), note: String(r["Poznámka"] || ""),
   }));
-  for (const r of sheet("Settings")) if (r.Key in next.settings) next.settings[r.Key] = String(r.Value);
+  for (const r of sheetRows(wb, SH.settings, false)) if (r["Klíč"] in next.settings) next.settings[r["Klíč"]] = String(r.Hodnota);
   if (!confirm(`Replace all data on this iPad with this file?\n\n${next.products.length} products, ` +
                `${next.payments.length} receipts, ${next.debts.length} debt entries.`)) return;
   state = next;
@@ -534,12 +680,12 @@ function renderBackupBanner() {
 }
 const hoursSinceExport = () => state.lastExport ? (Date.now() - new Date(state.lastExport)) / 36e5 : Infinity;
 
-$$("[data-export]").forEach(b => b.onclick = () => {
-  $("#exportName").textContent = exportName();
+$$("[data-export]").forEach(b => b.onclick = guard(async () => {
   $("#exportModal").classList.add("open");
-});
-$("#exportShare").onclick = guard(async () => { await exportShare(); closeModals(); });
-$("#exportDownload").onclick = guard(() => { exportDownload(); closeModals(); });
+  await prepareExport();
+}));
+$("#exportShare").onclick = guard(async () => { if (exportFile) { await exportShare(); closeModals(); } });
+$("#exportDownload").onclick = guard(() => { if (exportFile) { exportDownload(); closeModals(); } });
 $("#importBtn").onclick = () => $("#importFile").click();
 $("#importFile").onchange = guard(async e => {
   const f = e.target.files[0];

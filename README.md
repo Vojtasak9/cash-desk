@@ -18,17 +18,20 @@ internet needed while selling – and gives you **everything as one Excel file**
 
 ## Excel file
 
+Laid out like the *Jarmark* workbook (Czech sheet names, Excel "Heading 1" headers, amounts in Kč, receipts `P001`, `P002`, …):
+
 | Sheet | Contents |
 |---|---|
-| Products | ID, name, price, stock, on sale |
-| Payments | receipt no., date, time, items, total, method (QR/Cash), received, change, status |
-| PaymentItems | every line of every receipt |
-| Debts | every lend / repayment |
-| DebtSummary | per person: lent, repaid, still owes |
-| DailySummary | per day: receipts, cash, QR, total |
-| Settings | account and shop settings |
+| Prodej | pieces sold per product per sale day (like *Prodej Propisek*), with formulas for *Celkem (ks)*, *Tržba za daný druh zboží* and *Tržba celkem* |
+| Evidence Prodeje | every receipt line: Číslo, Produkt, Počet, price, total, date |
+| Evidence Pokladny | Produkty: name, price, stock, on sale |
+| Účtenky | every receipt: number, date, time, items, amount, Hotově / QR, received, change, storno |
+| Denní uzávěrka | per day: receipts, Hotově, QR, Celkem (with a total row) |
+| Dluhy | every lend (Půjčeno) / repayment (Vráceno) |
+| Kdo dluží | per person: Půjčeno, Vráceno, Ještě dluží |
+| Nastavení | shop name and bank account (so the file can be loaded back) |
 
-You can edit products in Excel and load the file back in.
+You can edit products in *Evidence Pokladny* and load the file back in.
 
 ## On the iPad
 
@@ -57,7 +60,7 @@ then open http://localhost:8000.
 
 ## Libraries (included in `vendor/`, so it works offline)
 
-- [SheetJS](https://sheetjs.com/) 0.18.5 – reads and writes the Excel file
+- [ExcelJS](https://github.com/exceljs/exceljs) 4.4.0 – reads and writes the Excel file with formatting
 - [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4 – draws the QR code
 
 The QR payment string follows the [QR Platba spec](https://qr-platba.cz/pro-vyvojare/specifikace-formatu/)
