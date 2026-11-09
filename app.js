@@ -212,7 +212,8 @@ function debtTotals() {
 const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const DAY_NAMES = ["Neděle", "Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota"];
 const SH = {
-  sales: "Prodej", lines: "Evidence Prodeje", products: "Evidence Pokladny", receipts: "Účtenky",
+  sales: "Prodej", lines: "Evidence Prodeje", products: "Evidence Pokladny",
+  oldReceipts: "Účtenky",  // only in files saved before it was merged into Evidence Prodeje
   days: "Denní uzávěrka", debts: "Dluhy", debtors: "Kdo dluží", settings: "Nastavení",
 };
 const METHOD_CZ = {Cash: "Hotově", QR: "QR"};
@@ -296,24 +297,22 @@ function buildWorkbook() {
   ws.getColumn(revCol).width = 30; ws.getColumn(revCol).numFmt = moneyFmt();
   ws.getColumn(grandCol).width = 18; ws.getColumn(grandCol).numFmt = moneyFmt();
 
-  // 2) Evidence Prodeje - every receipt line (Číslo / Produkt / Počet as in the Jarmark file)
-  addSheet(wb, SH.lines, ["Číslo", "Produkt", "Počet", "Cena za kus", "Celkem", "Datum", "Stav"],
-    state.paymentItems.map(i => [i.receipt, i.name, i.qty, i.unitPrice, i.lineTotal, dateOf[i.receipt] || "",
-                                 ok.has(i.receipt) ? "" : "storno"]),
-    {style: () => {}, widths: {Produkt: 18}, money: ["Cena za kus", "Celkem"]});
+  // 2) Evidence Prodeje - one row per product sold, with the payment details of its receipt
+  // (Číslo / Produkt / Počet as in the Jarmark file). Received and change go on the first row
+  // of a receipt only, so summing those columns doesn't count them twice.
+  addSheet(wb, SH.lines, ["Číslo", "Produkt", "Počet", "Cena za kus", "Celkem", "Datum", "Čas", "Platba", "Přijato", "Vráceno", "Stav"],
+    state.payments.flatMap(p => state.paymentItems.filter(i => i.receipt === p.receipt).map((i, n) => [
+      i.receipt, i.name, i.qty, i.unitPrice, i.lineTotal, p.date, p.time, METHOD_CZ[p.method] || p.method,
+      n === 0 ? p.received ?? "" : "", n === 0 ? p.change ?? "" : "", p.status === "VOID" ? "storno" : "OK",
+    ])),
+    {style: () => {}, widths: {Produkt: 18, Datum: 12}, money: ["Cena za kus", "Celkem", "Přijato", "Vráceno"]});
 
   // 3) Evidence Pokladny - product list with price and stock
   addSheet(wb, SH.products, ["Produkty:", "Cena za kus", "Skladem", "V prodeji"],
     state.products.map(p => [p.name, p.price, p.stock ?? "", p.active ? "ano" : "ne"]),
     {style: () => {}, widths: {"Produkty:": 18}, money: ["Cena za kus"]});
 
-  // 4) Účtenky - one row per receipt with payment method
-  addSheet(wb, SH.receipts, ["Číslo", "Datum", "Čas", "Položky", "Částka", "Platba", "Přijato", "Vráceno", "Stav"],
-    state.payments.map(p => [p.receipt, p.date, p.time, p.items, p.total, METHOD_CZ[p.method] || p.method,
-                             p.received ?? "", p.change ?? "", p.status === "VOID" ? "storno" : "OK"]),
-    {style: heading, widths: {Položky: 45, Datum: 12}, money: ["Částka", "Přijato", "Vráceno"]});
-
-  // 5) Denní uzávěrka - totals per day with a sum row
+  // 4) Denní uzávěrka - totals per day with a sum row
   const days = dailyTotals();
   const dws = addSheet(wb, SH.days, ["Datum", "Den", "Účtenek", "Hotově", "QR", "Celkem"],
     days.map(d => [d.date, DAY_NAMES[new Date(d.date + "T12:00").getDay()], d.receipts, d.cash, d.qr, d.total]),
@@ -325,7 +324,7 @@ function buildWorkbook() {
     bold(dws.addRow(["Celkem", "", sum("C", tot.r), sum("D", round2(tot.c)), sum("E", round2(tot.q)), sum("F", round2(tot.t))]));
   }
 
-  // 6) Dluhy + Kdo dluží
+  // 5) Dluhy + Kdo dluží
   addSheet(wb, SH.debts, ["Datum", "Osoba", "Typ", "Částka", "Poznámka"],
     state.debts.map(d => [d.date, d.person, d.type === "Lent" ? "Půjčeno" : "Vráceno", d.amount, d.note || ""]),
     {style: heading, widths: {Datum: 12, Osoba: 18, Poznámka: 30}, money: ["Částka"]});
@@ -333,7 +332,7 @@ function buildWorkbook() {
     debtTotals().map(d => [d.person, d.lent, d.repaid, d.owes]),
     {style: heading, widths: {Osoba: 18}, money: ["Půjčeno", "Vráceno", "Ještě dluží"]});
 
-  // 7) Nastavení - needed to load the file back into the app
+  // 6) Nastavení - needed to load the file back into the app
   addSheet(wb, SH.settings, ["Klíč", "Hodnota"], Object.entries(state.settings), {widths: {Hodnota: 30}});
   return wb;
 }
@@ -433,16 +432,32 @@ async function importExcel(file) {
   }));
   const idOf = name => (next.products.find(p => p.name === name) || {}).id ?? null;
   const fromCz = m => m === "QR" ? "QR" : "Cash";
-  next.payments = sheetRows(wb, SH.receipts).filter(r => r["Číslo"] !== "").map(r => ({
-    receipt: normalizeReceipt(r["Číslo"]), date: cellDate(r.Datum), time: cellTime(r["Čas"]),
-    items: String(r["Položky"]), total: num(r["Částka"]), method: fromCz(r.Platba),
-    received: blankToNull(r["Přijato"]), change: blankToNull(r["Vráceno"]),
-    status: String(r.Stav).toLowerCase() === "storno" ? "VOID" : "OK",
-  }));
-  next.paymentItems = sheetRows(wb, SH.lines).filter(r => r["Číslo"] !== "").map(r => ({
+  const lines = sheetRows(wb, SH.lines).filter(r => r["Číslo"] !== "");
+  next.paymentItems = lines.map(r => ({
     receipt: normalizeReceipt(r["Číslo"]), productId: idOf(String(r.Produkt)), name: String(r.Produkt),
     qty: num(r["Počet"]), unitPrice: num(r["Cena za kus"]), lineTotal: num(r.Celkem),
   }));
+  const isVoid = r => String(r.Stav).toLowerCase() === "storno";
+  if (wb.getWorksheet(SH.oldReceipts)) {
+    next.payments = sheetRows(wb, SH.oldReceipts).filter(r => r["Číslo"] !== "").map(r => ({
+      receipt: normalizeReceipt(r["Číslo"]), date: cellDate(r.Datum), time: cellTime(r["Čas"]),
+      items: String(r["Položky"]), total: num(r["Částka"]), method: fromCz(r.Platba),
+      received: blankToNull(r["Přijato"]), change: blankToNull(r["Vráceno"]), status: isVoid(r) ? "VOID" : "OK",
+    }));
+  } else {
+    const receipts = new Map();
+    for (const r of lines) {
+      const receipt = normalizeReceipt(r["Číslo"]);
+      if (!receipts.has(receipt)) receipts.set(receipt, {
+        receipt, date: cellDate(r.Datum), time: cellTime(r["Čas"]), items: "", total: 0, method: fromCz(r.Platba),
+        received: blankToNull(r["Přijato"]), change: blankToNull(r["Vráceno"]), status: isVoid(r) ? "VOID" : "OK",
+      });
+      const p = receipts.get(receipt);
+      p.items += (p.items ? ", " : "") + `${num(r["Počet"])}x ${r.Produkt}`;
+      p.total = round2(p.total + num(r.Celkem));
+    }
+    next.payments = [...receipts.values()];
+  }
   next.debts = sheetRows(wb, SH.debts, false).filter(r => r.Osoba !== "").map((r, i) => ({
     id: i + 1, date: cellDate(r.Datum), person: String(r.Osoba),
     type: r.Typ === "Vráceno" ? "Repaid" : "Lent", amount: num(r["Částka"]), note: String(r["Poznámka"] || ""),

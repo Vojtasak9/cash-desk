@@ -23,9 +23,8 @@ Laid out like the *Jarmark* workbook (Czech sheet names, Excel "Heading 1" heade
 | Sheet | Contents |
 |---|---|
 | Prodej | pieces sold per product per sale day (like *Prodej Propisek*), with formulas for *Celkem (ks)*, *Tržba za daný druh zboží* and *Tržba celkem* |
-| Evidence Prodeje | every receipt line: Číslo, Produkt, Počet, price, total, date |
+| Evidence Prodeje | one row per product sold: Číslo, Produkt, Počet, price, total, date, time, Hotově / QR, received, change, storno |
 | Evidence Pokladny | Produkty: name, price, stock, on sale |
-| Účtenky | every receipt: number, date, time, items, amount, Hotově / QR, received, change, storno |
 | Denní uzávěrka | per day: receipts, Hotově, QR, Celkem (with a total row) |
 | Dluhy | every lend (Půjčeno) / repayment (Vráceno) |
 | Kdo dluží | per person: Půjčeno, Vráceno, Ještě dluží |
