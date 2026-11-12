@@ -47,6 +47,7 @@
   td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
   .total { font-size:28px; font-weight:700; text-align:right; margin:12px 0; }
   .receipt-no { color:var(--muted); font-size:14px; }
+  button.receipt-no { min-height:auto; padding:4px 8px; border:1px dashed var(--line); border-radius:6px; color:var(--accent); }
   button.btn { border:0; border-radius:10px; padding:12px 18px; min-height:48px; font-size:16px; cursor:pointer; background:var(--accent); color:#fff; }
   button.btn.big { width:100%; padding:18px; font-size:20px; margin-top:10px; min-height:64px; }
   button.btn:active { filter:brightness(.9); }
@@ -111,7 +112,7 @@
     <div class="register">
       <div class="card"><h2>Products</h2><div class="grid" id="prodGrid"></div></div>
       <div class="card">
-        <h2>Order <span class="receipt-no" id="nextReceipt"></span></h2>
+        <h2>Order <button class="receipt-no link" id="nextReceipt" title="Change the receipt number"></button></h2>
         <table><tbody id="orderLines"></tbody></table>
         <div class="total" id="orderTotal">0</div>
         <button class="btn big" id="payQr">Pay with QR</button>

@@ -2,7 +2,7 @@
  * Cash Desk -> Google Sheets
  *
  * The cash desk app sends its data here and this script types it into the sheets:
- *   - every receipt (P001, P002, ...)  -> "Ten Párek Evidence pokladny" / Prodej
+ *   - every receipt (P001, P002, ...)  -> "Ten Párek Evidence pokladny" / Prodej and Kompletní evidence
  *   - loans and expenses (PPD / VPD)   -> "Ten Párek Evidence pokladny" / Kompletní evidence
  *   - the app loads products + prices  <- "Ten Párek Evidence pokladny" / Produkty
  *
@@ -127,6 +127,31 @@ function writeSale(op) {
   goods.setNote(goodsValue === goodsText ? "" : goodsText);
   sh.getRange(row, 2).setNote(APP_NOTE);
   sh.getRange(row, 1).setNumberFormat("d.m.yyyy");
+  writeBookSale(op, goodsText, cash, bank);
+}
+
+// The same receipt as a Paragon row in Kompletní evidence: cash under POKLADNA příjmy, QR under BĚŽNÝ ÚČET příjmy
+function writeBookSale(op, goodsText, cash, bank) {
+  const sh = bookSheet();
+  const end = footerRow(sh);
+  let row = findRow(sh, 2, op.receipt, end);
+  if (row && handWritten(sh, row, [3, 4, 5, 6, 7, 8])) { skipped.push(op.receipt + " (Kompletní evidence)"); return; }
+  row = row || freeBookRow(sh, end, "Paragon");
+  if (!row) row = insertBookRow(sh, end);
+  const kind = fitToDropdown(sh.getRange(row, 3), "Paragon", false);
+  sh.getRange(row, 1, 1, 8).setValues([[toDate(op.date), op.receipt, kind, goodsText, cash, "", bank, ""]]);
+  sh.getRange(row, 2).setNote(APP_NOTE);
+  sh.getRange(row, 1).setNumberFormat("d.m.yyyy");
+}
+
+// No empty row left: insert one inside the table (above its last row) so your SUM ranges grow with it,
+// move the last row up into it and use the bottom row for the new entry.
+function insertBookRow(sh, end) {
+  const cols = sh.getLastColumn();
+  sh.insertRowBefore(end - 1);
+  sh.getRange(end, 1, 1, cols).copyTo(sh.getRange(end - 1, 1, 1, cols));
+  sh.getRange(end, 1, 1, 8).clearContent();
+  return end;
 }
 
 // ---- loans and expenses -> Kompletní evidence
@@ -138,15 +163,7 @@ function writeEntry(op) {
   let row = findRow(sh, 2, op.number, end);
   if (row && handWritten(sh, row, [3, 4, 5, 6, 7, 8])) { skipped.push(op.number); return; }
   row = row || freeBookRow(sh, end, op.kind);
-  if (!row) {
-    // No empty row left: insert one inside the table (above its last row) so your SUM ranges
-    // grow with it, move the last row up into it and write the new entry at the bottom.
-    const cols = sh.getLastColumn();
-    sh.insertRowBefore(end - 1);
-    sh.getRange(end, 1, 1, cols).copyTo(sh.getRange(end - 1, 1, 1, cols));
-    row = end;
-    sh.getRange(row, 1, 1, 8).clearContent();
-  }
+  if (!row) row = insertBookRow(sh, end);
   // DOKUMENTY may be a dropdown (Zapůjčka / Vydáno / Paragon): if the app's type isn't one of its
   // choices, use Zapůjčka for money in and Vydáno for money out - POPIS still says what it was
   const docCell = sh.getRange(row, 3);

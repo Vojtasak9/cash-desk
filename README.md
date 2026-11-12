@@ -53,7 +53,7 @@ formulas** (SUM, SUMIF, …). The app never writes into formula columns.
 
 | What | Where it goes | Columns the app fills |
 |---|---|---|
-| every receipt | *Ten Párek Evidence pokladny* → **Prodej** | DATUM, ČÍSLO (P001…), TYP DOKUMENTU (Paragon), TYP ZBOŽÍ (e.g. `2x Hotdog, 1x Mini`), amount under **POKLADNA** (cash) or **BĚŽNÝ ÚČET** (QR) |
+| every receipt | *Ten Párek Evidence pokladny* → **Prodej**, and as a *Paragon* row in **Kompletní evidence** (cash under POKLADNA příjmy, QR under BĚŽNÝ ÚČET příjmy) | DATUM, ČÍSLO (P001…), TYP DOKUMENTU (Paragon), TYP ZBOŽÍ (e.g. `2x Hotdog, 1x Mini`), amount under **POKLADNA** (cash) or **BĚŽNÝ ÚČET** (QR) |
 | a cancelled receipt | the same row | TYP ZBOŽÍ starts with `STORNO`, amounts emptied |
 | money in / out of the cash box | *Ten Párek Evidence pokladny* → **Kompletní evidence** | DATUM, ČÍSLO (PPD001… in, VPD001… out), DOKUMENTY (Zapůjčka, Vrácení zapůjčky, Vydáno, Půjčka z kasy, Splátka), POPIS, POKLADNA Příjmy or Výdaje |
 | products and prices | read from *Ten Párek Evidence pokladny* → **Produkty** (column A Produkt, column B Cena) | – |

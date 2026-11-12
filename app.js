@@ -139,7 +139,24 @@ const formatReceipt = n => "P" + String(n).padStart(3, "0");  // P001, P002, ...
 const normalizeReceipt = code => formatReceipt(receiptNumber(code));
 // Continues after the highest number in the app and in Google Sheets (receipts typed there by hand count too)
 const sheetNumber = kind => (state.sync && state.sync.url && state.sync.numbers && state.sync.numbers[kind]) || 0;
-const nextReceipt = () => formatReceipt(Math.max(sheetNumber("P"), ...state.payments.map(p => receiptNumber(p.receipt))) + 1);
+// After a number was set by hand, continue from it (a cancelled receipt's number may be reused);
+// otherwise continue after the highest number in the app and the sheet.
+function nextReceipt() {
+  const taken = new Set(state.payments.filter(p => p.status !== "VOID").map(p => receiptNumber(p.receipt)));
+  let n = state.nextP != null ? state.nextP
+    : Math.max(sheetNumber("P"), ...state.payments.map(p => receiptNumber(p.receipt))) + 1;
+  while (taken.has(n)) n++;
+  return formatReceipt(n);
+}
+
+function setNextReceipt(text) {
+  const m = String(text).replace(/\s+/g, "").toUpperCase().match(/^P?0*(\d{1,6})$/);
+  if (!m || +m[1] === 0) throw new UserError("Receipt number must look like P001 (or just 1).");
+  const n = +m[1];
+  const used = state.payments.find(p => receiptNumber(p.receipt) === n && p.status !== "VOID");
+  if (used) throw new UserError(`${used.receipt} is already used (${used.items}). Void it first to use its number again.`);
+  state.nextP = n;
+}
 const productById = id => state.products.find(p => p.id === +id);
 
 async function createPayment(order, method, received) {
@@ -164,6 +181,13 @@ async function createPayment(order, method, received) {
     received = null;
   }
   const receipt = nextReceipt();
+  // reusing a cancelled receipt's number: the new sale replaces it
+  const old = state.payments.find(p => p.receipt === receipt);
+  if (old) {
+    state.payments = state.payments.filter(p => p !== old);
+    state.paymentItems = state.paymentItems.filter(i => i.receipt !== receipt);
+  }
+  if (state.nextP != null) state.nextP = receiptNumber(receipt) + 1;
   for (const {p, qty} of lines) if (p.stock != null) p.stock -= qty;
   state.payments.push({
     receipt, date: today(), time: nowTime(),
@@ -665,6 +689,14 @@ function renderOrder() {
 }
 
 $("#clearOrder").onclick = () => { order = {}; renderOrder(); };
+$("#nextReceipt").onclick = guard(async () => {
+  const text = prompt("Number for the next receipt (e.g. 1 or P001). The following ones continue from it.", nextReceipt());
+  if (text == null || text.trim() === "") return;
+  setNextReceipt(text);
+  await save(false);
+  renderOrder();
+  toast("Next receipt: " + nextReceipt());
+});
 
 $("#payQr").onclick = guard(() => {
   const total = orderTotal();
