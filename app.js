@@ -9,14 +9,16 @@ const $$ = s => document.querySelectorAll(s);
 
 const DEFAULT_STATE = () => ({
   products: [
-    {id: 1, name: "Řez", price: 20, stock: null, active: true},
-    {id: 2, name: "Koláček", price: 15, stock: null, active: true},
-    {id: 3, name: "Závin", price: 25, stock: null, active: true},
+    {id: 1, name: "Standard", price: 35, stock: null, active: true},
+    {id: 2, name: "Mini", price: 25, stock: null, active: true},
+    {id: 3, name: "Hotdog", price: 70, stock: null, active: true},
   ],
   payments: [],      // {receipt, date, time, items, total, method, received, change, status}
   paymentItems: [],  // {receipt, productId, name, qty, unitPrice, lineTotal}
-  debts: [],         // {id, date, person, type: "Lent"|"Repaid", amount, note}
-  settings: {shop_name: "Jarmark", account_name: "", iban: "", currency: "CZK"},
+  debts: [],         // cash book: {id, number, date, type (see KINDS), person, amount, note}
+  settings: {shop_name: "Jarmark", account_name: "", iban: "", currency: "CZK", start_cash: 0},
+  sync: {url: "", key: "", lastSync: null, error: null},  // Google Sheets web app (not exported to Excel)
+  outbox: [],        // changes waiting to be sent to Google Sheets
   lastExport: null,  // ISO time of the last Excel export
   changedSinceExport: false,
 });
@@ -169,7 +171,9 @@ async function createPayment(order, method, received) {
   for (const {p, qty, lineTotal} of lines) {
     state.paymentItems.push({receipt, productId: p.id, name: p.name, qty, unitPrice: p.price, lineTotal});
   }
+  queue(saleOp(state.payments[state.payments.length - 1]));
   await save();
+  trySync();
   return {receipt, total, change};
 }
 
@@ -181,7 +185,9 @@ async function voidPayment(receipt) {
     const p = productById(it.productId);
     if (p && p.stock != null) p.stock += it.qty;
   }
+  queue(saleOp(pay));
   await save();
+  trySync();
 }
 
 function dailyTotals() {
@@ -196,14 +202,110 @@ function dailyTotals() {
     .map(d => ({...d, cash: round2(d.cash), qr: round2(d.qr), total: round2(d.cash + d.qr)}));
 }
 
+// ---- cash book: money going into or out of the cash box besides sales
+// dir +1 = cash comes in, -1 = cash goes out. "cz" is the document type written to the sheets.
+const KINDS = {
+  LoanIn:       {cz: "Zapůjčka",         en: "Loan into the kasa",     dir: +1, person: true,  text: p => `Půjčeno od: ${p}`},
+  LoanInRepaid: {cz: "Vrácení zapůjčky", en: "Kasa repays a loan",     dir: -1, person: true,  text: p => `Vráceno: ${p}`},
+  Expense:      {cz: "Vydáno",           en: "Expense / purchase",     dir: -1, person: false, text: p => `Nakoupil(a): ${p}`},
+  Lent:         {cz: "Půjčka z kasy",    en: "Lent from the kasa",     dir: -1, person: true,  text: p => `Půjčeno z kasy: ${p}`},
+  Repaid:       {cz: "Splátka",          en: "Paid back to the kasa",  dir: +1, person: true,  text: p => `Splaceno od: ${p}`},
+};
+const kindOf = e => KINDS[e.type] || KINDS.Expense;
+
+// PPD = příjmový pokladní doklad (cash in), VPD = výdajový pokladní doklad (cash out)
+const docPrefix = type => (KINDS[type] || KINDS.Expense).dir > 0 ? "PPD" : "VPD";
+function nextDocNumber(type) {
+  const prefix = docPrefix(type);
+  const used = state.debts.filter(d => String(d.number || "").startsWith(prefix)).map(d => receiptNumber(d.number));
+  return prefix + String(Math.max(0, ...used) + 1).padStart(3, "0");
+}
+const entryText = e => [e.person ? kindOf(e).text(e.person) : "", e.note].filter(Boolean).join(" – ") || kindOf(e).cz;
+
+function cashNow() {
+  const start = num(state.settings.start_cash);
+  const sales = state.payments.filter(p => p.status !== "VOID" && p.method === "Cash").reduce((a, p) => a + p.total, 0);
+  const moves = state.debts.reduce((a, e) => a + kindOf(e).dir * e.amount, 0);
+  return {start, sales: round2(sales), in: round2(state.debts.filter(e => kindOf(e).dir > 0).reduce((a, e) => a + e.amount, 0)),
+          out: round2(state.debts.filter(e => kindOf(e).dir < 0).reduce((a, e) => a + e.amount, 0)),
+          total: round2(start + sales + moves)};
+}
+
+// Per person: what the kasa still owes them (their loans) and what they still owe the kasa
 function debtTotals() {
   const people = {};
-  for (const d of state.debts) {
-    const p = people[d.person] ||= {person: d.person, lent: 0, repaid: 0};
-    if (d.type === "Lent") p.lent += d.amount; else p.repaid += d.amount;
+  for (const e of state.debts) {
+    if (!e.person || e.type === "Expense") continue;
+    const p = people[e.person] ||= {person: e.person, kasaOwes: 0, owesKasa: 0};
+    if (e.type === "LoanIn") p.kasaOwes += e.amount;
+    if (e.type === "LoanInRepaid") p.kasaOwes -= e.amount;
+    if (e.type === "Lent") p.owesKasa += e.amount;
+    if (e.type === "Repaid") p.owesKasa -= e.amount;
   }
   return Object.values(people).sort((a, b) => a.person.localeCompare(b.person))
-    .map(p => ({person: p.person, lent: round2(p.lent), repaid: round2(p.repaid), owes: round2(p.lent - p.repaid)}));
+    .map(p => ({...p, kasaOwes: round2(p.kasaOwes), owesKasa: round2(p.owesKasa)}));
+}
+
+// ---------------------------------------------------------------- Google Sheets sync
+// Every change is queued in state.outbox and sent to the Apps Script web app (google-apps-script.js).
+// Works offline: the queue is kept on the device and sent when the internet is back.
+
+const opKey = op => op.type === "sale" ? "sale:" + op.receipt : "entry:" + op.number;
+
+function queue(op) {
+  if (!state.sync.url) return;
+  state.outbox = state.outbox.filter(o => opKey(o) !== opKey(op));  // the newest version wins
+  state.outbox.push(op);
+}
+const saleOp = p => ({type: "sale", receipt: p.receipt, date: p.date, goods: p.items, total: p.total,
+                      method: p.method, void: p.status === "VOID"});
+const entryOp = e => ({type: "entry", number: e.number, date: e.date, kind: kindOf(e).cz, description: entryText(e),
+                       cashIn: kindOf(e).dir > 0 ? e.amount : "", cashOut: kindOf(e).dir < 0 ? e.amount : ""});
+
+async function callSheets(body, sync = state.sync) {
+  let r, j;
+  try {
+    r = await fetch(sync.url, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"},
+                               body: JSON.stringify({...body, key: sync.key})});
+  } catch (e) { throw new UserError("Can't reach Google - check the internet connection."); }
+  try { j = await r.json(); }
+  catch (e) { throw new UserError("Google didn't answer as expected - check the web app URL (it ends with /exec) and that access is set to Anyone."); }
+  if (!j.ok) throw new UserError(j.error || "Google Sheets returned an error.");
+  return j;
+}
+
+let syncing = false;
+async function trySync() {
+  if (syncing || !state.sync.url || !state.outbox.length || !navigator.onLine) return renderSync();
+  syncing = true;
+  renderSync();
+  const ops = state.outbox.slice();
+  try {
+    await callSheets({action: "sync", ops});
+    state.outbox = state.outbox.filter(o => !ops.includes(o));  // changes made meanwhile stay queued
+    state.sync.lastSync = new Date().toISOString();
+    state.sync.error = null;
+  } catch (e) {
+    state.sync.error = e.message;
+  } finally {
+    syncing = false;
+    await save(false);
+    renderSync();
+  }
+  if (!state.sync.error && state.outbox.length) trySync();
+}
+
+// Names and prices come from Kasa / Produkty; stock and "on sale" stay as set in the app
+async function loadProductsFromSheet(sync = state.sync) {
+  const {products} = await callSheets({action: "products"}, sync);
+  if (!products.length) throw new UserError('No products found in Kasa → sheet "Produkty".');
+  let nextId = Math.max(0, ...state.products.map(p => p.id)) + 1;
+  state.products = products.map(sp => {
+    const old = state.products.find(p => p.name.toLowerCase() === sp.name.toLowerCase());
+    return old ? {...old, name: sp.name, price: sp.price} : {id: nextId++, name: sp.name, price: sp.price, stock: null, active: true};
+  });
+  await save(false);
+  return products.length;
 }
 
 // ---------------------------------------------------------------- Excel export / import
@@ -214,7 +316,8 @@ const DAY_NAMES = ["Neděle", "Pondělí", "Úterý", "Středa", "Čtvrtek", "P�
 const SH = {
   sales: "Prodej", lines: "Evidence Prodeje", products: "Evidence Pokladny",
   oldReceipts: "Účtenky",  // only in files saved before it was merged into Evidence Prodeje
-  days: "Denní uzávěrka", debts: "Dluhy", debtors: "Kdo dluží", settings: "Nastavení",
+  days: "Denní uzávěrka", book: "Pokladní kniha", debtors: "Kdo dluží", settings: "Nastavení",
+  oldDebts: "Dluhy",  // files saved before the cash book
 };
 const METHOD_CZ = {Cash: "Hotově", QR: "QR"};
 
@@ -324,13 +427,14 @@ function buildWorkbook() {
     bold(dws.addRow(["Celkem", "", sum("C", tot.r), sum("D", round2(tot.c)), sum("E", round2(tot.q)), sum("F", round2(tot.t))]));
   }
 
-  // 5) Dluhy + Kdo dluží
-  addSheet(wb, SH.debts, ["Datum", "Osoba", "Typ", "Částka", "Poznámka"],
-    state.debts.map(d => [d.date, d.person, d.type === "Lent" ? "Půjčeno" : "Vráceno", d.amount, d.note || ""]),
-    {style: heading, widths: {Datum: 12, Osoba: 18, Poznámka: 30}, money: ["Částka"]});
-  addSheet(wb, SH.debtors, ["Osoba", "Půjčeno", "Vráceno", "Ještě dluží"],
-    debtTotals().map(d => [d.person, d.lent, d.repaid, d.owes]),
-    {style: heading, widths: {Osoba: 18}, money: ["Půjčeno", "Vráceno", "Ještě dluží"]});
+  // 5) Pokladní kniha (loans, expenses) + Kdo dluží
+  addSheet(wb, SH.book, ["Datum", "Číslo", "Doklad", "Osoba", "Popis", "Příjem", "Výdaj", "Poznámka"],
+    state.debts.map(e => [e.date, e.number, kindOf(e).cz, e.person || "", entryText(e),
+                          kindOf(e).dir > 0 ? e.amount : "", kindOf(e).dir < 0 ? e.amount : "", e.note || ""]),
+    {style: heading, widths: {Datum: 12, Doklad: 18, Osoba: 16, Popis: 34, Poznámka: 24}, money: ["Příjem", "Výdaj"]});
+  addSheet(wb, SH.debtors, ["Osoba", "Kasa mu/jí dluží", "Dluží kase"],
+    debtTotals().map(d => [d.person, d.kasaOwes, d.owesKasa]),
+    {style: heading, widths: {Osoba: 18}, money: ["Kasa mu/jí dluží", "Dluží kase"]});
 
   // 6) Nastavení - needed to load the file back into the app
   addSheet(wb, SH.settings, ["Klíč", "Hodnota"], Object.entries(state.settings), {widths: {Hodnota: 30}});
@@ -458,14 +562,27 @@ async function importExcel(file) {
     }
     next.payments = [...receipts.values()];
   }
-  next.debts = sheetRows(wb, SH.debts, false).filter(r => r.Osoba !== "").map((r, i) => ({
-    id: i + 1, date: cellDate(r.Datum), person: String(r.Osoba),
-    type: r.Typ === "Vráceno" ? "Repaid" : "Lent", amount: num(r["Částka"]), note: String(r["Poznámka"] || ""),
-  }));
-  for (const r of sheetRows(wb, SH.settings, false)) if (r["Klíč"] in next.settings) next.settings[r["Klíč"]] = String(r.Hodnota);
+  const typeOf = cz => Object.keys(KINDS).find(k => KINDS[k].cz === cz) || "Expense";
+  if (wb.getWorksheet(SH.book)) {
+    next.debts = sheetRows(wb, SH.book).filter(r => r["Číslo"] !== "").map((r, i) => ({
+      id: i + 1, number: String(r["Číslo"]), date: cellDate(r.Datum), type: typeOf(r.Doklad), person: String(r.Osoba || ""),
+      amount: num(r["Příjem"]) || num(r["Výdaj"]), note: String(r["Poznámka"] || ""),
+    }));
+  } else {
+    next.debts = sheetRows(wb, SH.oldDebts, false).filter(r => r.Osoba !== "").map((r, i) => ({
+      id: i + 1, number: "", date: cellDate(r.Datum), person: String(r.Osoba),
+      type: r.Typ === "Vráceno" ? "Repaid" : "Lent", amount: num(r["Částka"]), note: String(r["Poznámka"] || ""),
+    }));
+  }
+  for (const r of sheetRows(wb, SH.settings, false)) {
+    if (r["Klíč"] in next.settings) next.settings[r["Klíč"]] = r["Klíč"] === "start_cash" ? num(r.Hodnota) : String(r.Hodnota);
+  }
   if (!confirm(`Replace all data on this iPad with this file?\n\n${next.products.length} products, ` +
                `${next.payments.length} receipts, ${next.debts.length} debt entries.`)) return;
+  next.sync = state.sync;      // keep the Google Sheets connection and anything not sent yet
+  next.outbox = state.outbox;
   state = next;
+  migrate();
   state.lastExport = new Date().toISOString();
   await save(false);
   order = {};
@@ -483,7 +600,7 @@ $$("nav button").forEach(b => b.onclick = () => {
   b.classList.add("active");
   $("#" + b.dataset.tab).classList.add("active");
   if (b.dataset.tab === "receipts") renderPayments();
-  if (b.dataset.tab === "debts") renderDebts();
+  if (b.dataset.tab === "book") renderBook();
   if (b.dataset.tab === "settings") renderSettings();
 });
 $$("[data-close]").forEach(b => b.onclick = () => b.closest(".modal").classList.remove("open"));
@@ -562,7 +679,7 @@ const pay = guard(async (method, received) => {
     const r = await createPayment(order, method, received);
     closeModals();
     order = {};
-    renderOrder(); renderProducts();
+    renderOrder(); renderProducts(); renderCash();
     toast(`${r.receipt} saved · ${money(r.total)}` + (r.change != null ? ` · change ${money(r.change)}` : ""));
   } finally {
     paying = false;
@@ -587,7 +704,7 @@ function renderPayments() {
   $$("[data-void]").forEach(b => b.onclick = guard(async () => {
     if (!confirm(`Void ${b.dataset.void}? Its items go back to stock.`)) return;
     await voidPayment(b.dataset.void);
-    renderOrder(); renderProducts(); renderPayments();
+    renderOrder(); renderProducts(); renderPayments(); renderCash();
   }));
 }
 $("#day").onchange = renderPayments;
@@ -635,35 +752,117 @@ $("#pSave").onclick = guard(async () => {
   toast("Product saved");
 });
 
-// ---- debts
-function renderDebts() {
+// ---- cash book + current cash
+function renderCash() {
+  const c = cashNow();
+  $("#cashPill").textContent = "Cash: " + money(c.total);
+  $("#cashNow").textContent = money(c.total);
+  $("#cashParts").textContent = `Starting cash ${money(c.start)} + cash sales ${money(c.sales)} + money in ${money(c.in)} − money out ${money(c.out)}`;
+}
+
+function renderBook() {
+  renderCash();
   const totals = debtTotals();
   $("#debtSummary").innerHTML = totals.map(s => `<tr><td>${esc(s.person)}</td>
-    <td class="num">${money(s.lent)}</td><td class="num">${money(s.repaid)}</td>
-    <td class="num ${s.owes > 0 ? "owes" : "settled"}">${money(s.owes)}</td></tr>`).join("")
-    || '<tr><td colspan="4" class="muted">Nobody owes you anything</td></tr>';
-  $("#debtRows").innerHTML = state.debts.slice().reverse().map(e => `<tr><td>${esc(e.date)}</td><td>${esc(e.person)}</td>
-    <td>${e.type === "Lent" ? "Lent" : "Paid back"}</td><td class="num">${money(e.amount)}</td><td>${esc(e.note)}</td>
-    <td><button class="link bad" data-ddel="${e.id}">delete</button></td></tr>`).join("");
+    <td class="num ${s.kasaOwes > 0 ? "owes" : "settled"}">${money(s.kasaOwes)}</td>
+    <td class="num ${s.owesKasa > 0 ? "owes" : "settled"}">${money(s.owesKasa)}</td></tr>`).join("")
+    || '<tr><td colspan="3" class="muted">No loans yet</td></tr>';
+  const waiting = new Set(state.outbox.map(opKey));
+  $("#debtRows").innerHTML = state.debts.slice().reverse().map(e => `<tr><td>${esc(e.date)}</td><td><b>${esc(e.number)}</b></td>
+    <td>${esc(kindOf(e).en)}<br><small class="muted">${esc(kindOf(e).cz)}</small></td><td>${esc(entryText(e))}</td>
+    <td class="num">${kindOf(e).dir > 0 ? money(e.amount) : ""}</td><td class="num">${kindOf(e).dir < 0 ? money(e.amount) : ""}</td>
+    <td>${waiting.has("entry:" + e.number) ? '<small class="muted">not sent yet</small>' : ""}</td>
+    <td><button class="link bad" data-ddel="${e.id}">delete</button></td></tr>`).join("")
+    || '<tr><td colspan="8" class="muted">Nothing yet</td></tr>';
   $("#peopleList").innerHTML = totals.map(s => `<option value="${esc(s.person)}">`).join("");
   $$("[data-ddel]").forEach(b => b.onclick = guard(async () => {
-    if (!confirm("Delete this entry?")) return;
-    state.debts = state.debts.filter(d => d.id !== +b.dataset.ddel);
+    const e = state.debts.find(d => d.id === +b.dataset.ddel);
+    if (!confirm(`Delete ${e.number}? It is also removed from Google Sheets.`)) return;
+    state.debts = state.debts.filter(d => d !== e);
+    queue({type: "deleteEntry", number: e.number});
     await save();
-    renderDebts();
+    renderBook();
+    trySync();
   }));
 }
+$("#dType").onchange = () => {
+  const k = KINDS[$("#dType").value];
+  $("#dPerson").placeholder = k.person ? "Person" : "Who bought it (optional)";
+  $("#dNote").placeholder = k.person ? "Note (optional)" : "What was bought (e.g. Koupě paragonů)";
+};
 $("#dSave").onclick = guard(async () => {
-  const person = $("#dPerson").value.trim();
-  if (!person) throw new UserError("Person is required.");
+  const type = $("#dType").value, k = KINDS[type];
+  const person = $("#dPerson").value.trim(), note = $("#dNote").value.trim();
+  if (k.person && !person) throw new UserError("Person is required.");
+  if (!k.person && !note) throw new UserError("Write what was bought.");
   const amount = num($("#dAmount").value, NaN);
   if (isNaN(amount) || amount <= 0) throw new UserError("Amount must be more than 0.");
-  state.debts.push({id: Math.max(0, ...state.debts.map(d => d.id)) + 1, date: today(), person,
-                    type: $("#dType").value, amount, note: $("#dNote").value.trim()});
+  if (k.dir < 0 && amount > cashNow().total) {
+    if (!confirm(`There is only ${money(cashNow().total)} in the cash box. Save anyway?`)) return;
+  }
+  const e = {id: Math.max(0, ...state.debts.map(d => d.id)) + 1, number: nextDocNumber(type), date: today(),
+             type, person, amount, note};
+  state.debts.push(e);
+  queue(entryOp(e));
   await save();
-  ["#dAmount", "#dNote"].forEach(s => $(s).value = "");
-  renderDebts();
-  toast("Saved");
+  ["#dPerson", "#dAmount", "#dNote"].forEach(s => $(s).value = "");
+  renderBook();
+  toast(`${e.number} saved`);
+  trySync();
+});
+
+// ---- Google Sheets status
+function renderSync() {
+  const s = state.sync, n = state.outbox.length;
+  let pill = "", text;
+  if (!s.url) text = "Not connected.";
+  else if (syncing) { pill = "Sheets: sending…"; text = "Sending…"; }
+  else if (s.error) { pill = `Sheets: ${n || ""} not sent ⚠`; text = "Last try failed: " + s.error; }
+  else if (n) { pill = `Sheets: ${n} waiting`; text = `${n} change(s) waiting` + (navigator.onLine ? "" : " - no internet, they are sent when it's back") + "."; }
+  else { pill = "Sheets ✓"; text = "Everything is in Google Sheets" + (s.lastSync ? " (last sent " + new Date(s.lastSync).toLocaleTimeString() + ")." : "."); }
+  $("#syncPill").textContent = pill;
+  $("#syncPill").style.display = pill ? "" : "none";
+  $("#syncPill").classList.toggle("warn", !!s.error);
+  $("#syncStatus").textContent = text;
+}
+$("#syncPill").onclick = () => $("[data-tab=settings]").click();
+
+$("#gsSave").onclick = guard(async () => {
+  const url = $("#gsUrl").value.trim(), key = $("#gsKey").value.trim();
+  if (url && !/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) {
+    throw new UserError("The web app URL starts with https://script.google.com/ and ends with /exec.");
+  }
+  if (url && !key) throw new UserError("Type the key from the script too.");
+  const firstTime = url && !state.sync.url;
+  if (url) {
+    $("#gsSave").disabled = true;
+    try {
+      const n = await loadProductsFromSheet({url, key});
+      toast(`Connected - ${n} products loaded from Kasa`);
+    } finally { $("#gsSave").disabled = false; }
+  }
+  state.sync = {...state.sync, url, key, error: null};
+  if (firstTime && (state.payments.length || state.debts.length) &&
+      confirm("Also send the receipts and cash book entries that are already in the app?")) {
+    state.payments.forEach(p => queue(saleOp(p)));
+    state.debts.forEach(e => queue(entryOp(e)));
+  }
+  if (!url) state.outbox = [];
+  await save(false);
+  renderAll();
+  trySync();
+});
+$("#gsSend").onclick = guard(async () => {
+  if (!state.sync.url) throw new UserError("Connect Google Sheets first.");
+  await trySync();
+  if (state.sync.error) throw new UserError(state.sync.error);
+  toast(state.outbox.length ? "Some changes are still waiting" : "Everything is in Google Sheets");
+});
+$("#gsProducts").onclick = guard(async () => {
+  if (!state.sync.url) throw new UserError("Connect Google Sheets first.");
+  const n = await loadProductsFromSheet();
+  renderAll();
+  toast(`${n} products loaded from Kasa`);
 });
 
 // ---- settings + Excel
@@ -671,7 +870,10 @@ function renderSettings() {
   const s = state.settings;
   $("#shopName").textContent = s.shop_name || "Cash Desk";
   $("#sShop").value = s.shop_name; $("#sName").value = s.account_name;
-  $("#sIban").value = s.iban; $("#sCur").value = s.currency;
+  $("#sIban").value = s.iban; $("#sCur").value = s.currency; $("#sStart").value = s.start_cash || 0;
+  $("#gsUrl").value = state.sync.url; $("#gsKey").value = state.sync.key;
+  $("#productsNote").style.display = state.sync.url ? "" : "none";
+  renderSync();
   $("#lastExport").textContent = state.lastExport
     ? "Last Excel file saved: " + new Date(state.lastExport).toLocaleString()
     : "No Excel file saved yet.";
@@ -682,6 +884,7 @@ $("#sSave").onclick = guard(async () => {
   state.settings = {
     shop_name: $("#sShop").value.trim(), account_name: $("#sName").value.trim(),
     iban: iban ? toIban(iban) : "", currency: $("#sCur").value.trim().toUpperCase() || "CZK",
+    start_cash: num($("#sStart").value),
   };
   await save();
   renderAll();
@@ -719,7 +922,19 @@ async function showStorageInfo() {
 }
 
 function renderAll() {
-  renderSettings(); renderOrder(); renderProducts(); renderDebts(); renderPayments();
+  renderSettings(); renderOrder(); renderProducts(); renderBook(); renderPayments();
+}
+
+// Fill in fields that older versions of the app didn't have
+function migrate() {
+  const d = DEFAULT_STATE();
+  state.settings = {...d.settings, ...state.settings};
+  state.sync ||= d.sync;
+  state.outbox ||= [];
+  for (const e of state.debts) {
+    if (!KINDS[e.type]) e.type = "Expense";
+    if (!e.number) e.number = nextDocNumber(e.type);
+  }
 }
 
 // ---------------------------------------------------------------- start
@@ -728,7 +943,9 @@ function renderAll() {
   try {
     db = await openDb();
     state = await dbGet("state");
-    if (!state) { state = DEFAULT_STATE(); await save(false); }
+    if (!state) state = DEFAULT_STATE();
+    migrate();
+    await save(false);
   } catch (e) {
     document.body.innerHTML = `<p style="padding:24px;font-size:18px">This browser can't store data (${esc(e.message)}).
       In Safari, turn off Private Browsing and open the app again.</p>`;
@@ -737,5 +954,11 @@ function renderAll() {
   $("#day").value = today();
   renderAll();
   showStorageInfo();
+  if (state.sync.url && navigator.onLine) {
+    loadProductsFromSheet().then(renderAll).catch(e => { state.sync.error = e.message; renderSync(); });
+  }
+  trySync();
+  setInterval(trySync, 60000);
+  addEventListener("online", trySync);
   if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js");
 })();

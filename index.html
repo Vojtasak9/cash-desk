@@ -78,16 +78,23 @@
   .banner { background:#fff6db; border:1px solid #f0d58a; color:#6b5200; border-radius:10px; padding:12px 16px; margin-bottom:16px; display:none; align-items:center; gap:12px; flex-wrap:wrap; }
   .banner.show { display:flex; }
   .banner span { flex:1; min-width:200px; }
+  .pill { background:rgba(255,255,255,.18); color:#fff; border:0; border-radius:999px; padding:8px 14px; font-size:15px; font-weight:600; white-space:nowrap; min-height:auto; }
+  button.pill { cursor:pointer; }
+  .pill.warn { background:#f0b429; color:#3d2c00; }
+  .cash-now { font-size:34px; font-weight:700; margin:4px 0; }
+  .order-cash { margin-top:12px; text-align:right; }
 </style>
 </head>
 <body>
 <header>
   <h1 id="shopName">Cash Desk</h1>
+  <span class="pill" id="cashPill" title="Cash in the box">Cash: 0</span>
+  <button class="pill" id="syncPill" style="display:none" title="Google Sheets"></button>
   <nav>
     <button data-tab="register" class="active">Register</button>
     <button data-tab="receipts">Receipts &amp; day total</button>
     <button data-tab="products">Products &amp; stock</button>
-    <button data-tab="debts">Debts</button>
+    <button data-tab="book">Cash book</button>
     <button data-tab="settings">Settings &amp; Excel</button>
   </nav>
 </header>
@@ -136,6 +143,8 @@
   <!-- PRODUCTS -->
   <section id="products" class="tab">
     <div class="card">
+      <p class="muted" id="productsNote" style="display:none;font-size:15px">Names and prices come from <b>Kasa → Produkty</b> in Google Sheets
+        and are loaded each time the app opens - change them there. Stock and "on sale" are kept in the app.</p>
       <h2 id="prodFormTitle">Add product</h2>
       <div class="row">
         <input id="pName" placeholder="Name">
@@ -154,30 +163,43 @@
     </div>
   </section>
 
-  <!-- DEBTS -->
-  <section id="debts" class="tab">
+  <!-- CASH BOOK -->
+  <section id="book" class="tab">
     <div class="card">
-      <h2>New entry</h2>
+      <h2>Cash in the box</h2>
+      <div class="cash-now" id="cashNow">0</div>
+      <p class="muted" id="cashParts"></p>
+      <p class="muted">QR payments go to the bank account, so they are not counted here.</p>
+    </div>
+    <div class="card">
+      <h2>Money in or out</h2>
       <div class="row">
+        <select id="dType">
+          <option value="LoanIn">Loan into the kasa (Zapůjčka) +</option>
+          <option value="LoanInRepaid">Kasa repays a loan (Vrácení zapůjčky) −</option>
+          <option value="Expense">Expense / purchase (Vydáno) −</option>
+          <option value="Lent">Lent from the kasa (Půjčka z kasy) −</option>
+          <option value="Repaid">Paid back to the kasa (Splátka) +</option>
+        </select>
         <input id="dPerson" placeholder="Person" list="peopleList">
         <datalist id="peopleList"></datalist>
-        <select id="dType"><option value="Lent">I lent them</option><option value="Repaid">They paid back</option></select>
         <input id="dAmount" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Amount" style="width:130px">
         <input id="dNote" placeholder="Note (optional)">
         <button class="btn" id="dSave">Add</button>
       </div>
+      <p class="muted">Money in gets a PPD number, money out a VPD number. Both go to "Kompletní evidence" in Google Sheets.</p>
     </div>
     <div class="card">
-      <h2>Who owes me</h2>
+      <h2>Who owes whom</h2>
       <table>
-        <thead><tr><th>Person</th><th class="num">Lent</th><th class="num">Paid back</th><th class="num">Still owes</th></tr></thead>
+        <thead><tr><th>Person</th><th class="num">The kasa owes them</th><th class="num">They owe the kasa</th></tr></thead>
         <tbody id="debtSummary"></tbody>
       </table>
     </div>
     <div class="card">
       <h2>History</h2>
       <table>
-        <thead><tr><th>Date</th><th>Person</th><th>Type</th><th class="num">Amount</th><th>Note</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Number</th><th>Type</th><th>Description</th><th class="num">In</th><th class="num">Out</th><th></th><th></th></tr></thead>
         <tbody id="debtRows"></tbody>
       </table>
     </div>
@@ -188,7 +210,7 @@
     <div class="card" style="max-width:560px">
       <h2>Excel file</h2>
       <p class="muted" style="font-size:15px">All data is kept on this iPad. The Excel file contains everything:
-        products, receipts, receipt lines, debts, daily totals and settings.</p>
+        products, receipts, receipt lines, the cash book, daily totals and settings.</p>
       <div class="row">
         <button class="btn" data-export>Save Excel file</button>
         <button class="btn ghost" id="importBtn">Load from Excel file…</button>
@@ -198,11 +220,28 @@
       <p class="muted" id="storageInfo"></p>
     </div>
     <div class="card" style="max-width:560px">
+      <h2>Google Sheets</h2>
+      <p class="muted" style="font-size:15px">Sends every receipt to <b>Evidence pokladny → Prodej</b> and every loan or expense to
+        <b>Kompletní evidence</b>, and loads products and prices from <b>Kasa → Produkty</b>.
+        Your formulas in the sheets do the calculating. Changes made offline are sent when the internet is back.</p>
+      <label>Web app URL (from Apps Script → Deploy)</label><input id="gsUrl" style="width:100%" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off">
+      <label>Key (the same as KEY in the script)</label><input id="gsKey" style="width:100%" autocomplete="off" autocapitalize="off">
+      <p class="muted" id="syncStatus"></p>
+      <div class="row">
+        <button class="btn" id="gsSave">Save &amp; connect</button>
+        <button class="btn ghost" id="gsSend">Send now</button>
+        <button class="btn ghost" id="gsProducts">Reload products</button>
+      </div>
+      <p class="muted">How to set it up: <a href="https://github.com/Vojtasak9/cash-desk#google-sheets" target="_blank" rel="noopener">step-by-step guide</a>.</p>
+    </div>
+    <div class="card" style="max-width:560px">
       <h2>Settings</h2>
       <label>Shop name (shown in the QR payment message)</label><input id="sShop" style="width:100%">
       <label>Account holder name</label><input id="sName" style="width:100%">
       <label>Bank account - IBAN or Czech number (e.g. 123456789/0800)</label><input id="sIban" style="width:100%">
       <label>Currency</label><input id="sCur" style="width:110px">
+      <label>Starting cash - money that was in the box before using the app</label>
+      <input id="sStart" type="number" inputmode="decimal" step="1" style="width:160px">
       <p class="muted">QR codes use the Czech "QR Platba" standard - every Czech banking app can scan them.</p>
       <button class="btn" id="sSave">Save settings</button>
     </div>
