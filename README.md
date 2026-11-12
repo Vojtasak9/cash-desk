@@ -87,6 +87,12 @@ The person doing this needs edit access to both *Ten Párek Evidence pokladny* a
 Changed the script later? **Nasadit → Spravovat nasazení → ✏️ → Verze: Nová verze** – the URL stays the same.
 
 Good to know:
+- Numbers continue after what is already in the sheets, including receipts and PPD/VPD numbers typed by hand.
+- The app only overwrites or deletes rows it wrote itself (they have the note *Zapsáno z pokladny* on the number).
+  Rows typed by hand are never changed; the app shows a warning if a number is already taken.
+- Dropdown columns (TYP ZBOŽÍ, DOKUMENTY) get one of their own choices: e.g. `1x Hotdog` → *Hot dog*, with all
+  items in the cell's note. A type the DOKUMENTY dropdown doesn't have is written as *Zapůjčka* (money in) or *Vydáno* (money out).
+  Give products in *Kasa → Produkty* names that contain a TYP ZBOŽÍ choice (e.g. *Párek v rohlíku Standard*) to have it filled in.
 - Don't rename the sheets or move their columns – the script checks the headers and shows an error in the app
   instead of writing into the wrong place.
 - The example row P001 (*Párel v rohlíku*) is overwritten by the first real sale.

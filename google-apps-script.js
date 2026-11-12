@@ -23,6 +23,11 @@ const BOOK_SHEET = "Kompletní evidence";
 const PRODUCTS_SHEET = "Produkty";
 const FIRST_ROW = 3;  // rows 1 and 2 are headers
 
+// Rows written by the app get this note on their number cell. The app only ever overwrites or deletes
+// rows with this note, so anything the team typed by hand is never touched.
+const APP_NOTE = "Zapsáno z pokladny";
+let skipped = [];  // numbers not written because a hand-written row already uses them
+
 function doGet() {
   return ContentService.createTextOutput("Cash Desk script is running.");
 }
@@ -34,12 +39,18 @@ function doPost(e) {
     if (KEY === "ZMEN-ME") throw new Error('Change KEY at the top of the script first (it still says "ZMEN-ME").');
     if (req.key !== KEY) throw new Error("Wrong key - type the same key into the app as in the script.");
     if (req.action === "products") {
-      out = {ok: true, products: readProducts()};
+      out = {ok: true, products: readProducts(), numbers: usedNumbers()};
     } else if (req.action === "sync") {
+      skipped = [];
       const lock = LockService.getScriptLock();
       lock.waitLock(30000);
-      try { req.ops.forEach(applyOp); } finally { lock.releaseLock(); }
-      out = {ok: true, done: req.ops.length};
+      try {
+        req.ops.forEach(applyOp);
+        SpreadsheetApp.flush();  // apply the writes now, so any error is reported to the app
+      } finally {
+        lock.releaseLock();
+      }
+      out = {ok: true, done: req.ops.length, skipped: skipped};
     } else {
       throw new Error("Unknown action: " + req.action);
     }
@@ -69,6 +80,27 @@ function readProducts() {
     .map(r => ({name: String(r[0]).trim(), price: toNumber(r[1])}));
 }
 
+// Highest numbers already used in the sheets (also ones typed by hand), so the app continues after them:
+// P = receipts in Prodej that have goods or an amount, PPD / VPD = Kompletní evidence
+function usedNumbers() {
+  const out = {P: 0, PPD: 0, VPD: 0};
+  const sales = getSheet(EVIDENCE_ID, SALES_SHEET);
+  if (sales.getLastRow() >= FIRST_ROW) {
+    sales.getRange(FIRST_ROW, 2, sales.getLastRow() - FIRST_ROW + 1, 5).getValues().forEach(r => {
+      const m = norm(r[0]).match(/^P(\d+)$/);
+      if (m && [r[2], r[3], r[4]].some(v => String(v).trim() !== "")) out.P = Math.max(out.P, +m[1]);
+    });
+  }
+  const book = getSheet(EVIDENCE_ID, BOOK_SHEET);
+  if (book.getLastRow() >= FIRST_ROW) {
+    book.getRange(FIRST_ROW, 2, book.getLastRow() - FIRST_ROW + 1, 1).getValues().forEach(r => {
+      const m = norm(r[0]).match(/^(PPD|VPD)(\d+)$/);
+      if (m) out[m[1]] = Math.max(out[m[1]], +m[2]);
+    });
+  }
+  return out;
+}
+
 // ---- receipts -> Prodej
 // DATUM | ČÍSLO | TYP DOKUMENTU | TYP ZBOŽÍ | POKLADNA příjmy | BĚŽNÝ ÚČET příjmy | (your formulas)
 
@@ -79,15 +111,22 @@ function writeSale(op) {
   expectHeader(sh, 5, "POKLADNA");
   expectHeader(sh, 6, "ÚČET");
   const last = Math.max(sh.getLastRow(), FIRST_ROW - 1);
-  let row = findRow(sh, 2, op.receipt, last + 1) || findRow(sh, 2, "", last + 1);
+  let row = findRow(sh, 2, op.receipt, last + 1);
+  if (row && handWritten(sh, row, [4, 5, 6])) { skipped.push(op.receipt); return; }
+  row = row || findRow(sh, 2, "", last + 1);
   if (!row) {
     row = last + 1;
     if (last >= FIRST_ROW) sh.getRange(last, 1, 1, sh.getLastColumn()).copyTo(sh.getRange(row, 1, 1, sh.getLastColumn()));
   }
   const cash = !op.void && op.method === "Cash" ? op.total : "";
   const bank = !op.void && op.method === "QR" ? op.total : "";
-  sh.getRange(row, 1, 1, 6).setValues([[toDate(op.date), op.receipt, "Paragon",
-    op.void ? "STORNO " + op.goods : op.goods, cash, bank]]);
+  const goodsText = op.void ? "STORNO " + op.goods : op.goods;
+  // TYP ZBOŽÍ may be a dropdown: write the matching choice, and always keep all items in the note
+  const goods = sh.getRange(row, 4);
+  const goodsValue = fitToDropdown(goods, goodsText, true);
+  sh.getRange(row, 1, 1, 6).setValues([[toDate(op.date), op.receipt, "Paragon", goodsValue, cash, bank]]);
+  goods.setNote(goodsValue === goodsText ? "" : goodsText);
+  sh.getRange(row, 2).setNote(APP_NOTE);
   sh.getRange(row, 1).setNumberFormat("d.m.yyyy");
 }
 
@@ -97,7 +136,9 @@ function writeSale(op) {
 function writeEntry(op) {
   const sh = bookSheet();
   const end = footerRow(sh);
-  let row = findRow(sh, 2, op.number, end) || freeBookRow(sh, end, op.kind);
+  let row = findRow(sh, 2, op.number, end);
+  if (row && handWritten(sh, row, [3, 4, 5, 6, 7, 8])) { skipped.push(op.number); return; }
+  row = row || freeBookRow(sh, end, op.kind);
   if (!row) {
     // No empty row left: insert one inside the table (above its last row) so your SUM ranges
     // grow with it, move the last row up into it and write the new entry at the bottom.
@@ -107,15 +148,45 @@ function writeEntry(op) {
     row = end;
     sh.getRange(row, 1, 1, 8).clearContent();
   }
-  sh.getRange(row, 1, 1, 6).setValues([[toDate(op.date), op.number, op.kind, op.description,
+  // DOKUMENTY may be a dropdown (Zapůjčka / Vydáno / Paragon): if the app's type isn't one of its
+  // choices, use Zapůjčka for money in and Vydáno for money out - POPIS still says what it was
+  const docCell = sh.getRange(row, 3);
+  let kind = fitToDropdown(docCell, op.kind, false);
+  if (kind === "") kind = fitToDropdown(docCell, op.cashIn ? "Zapůjčka" : "Vydáno", false);
+  sh.getRange(row, 1, 1, 6).setValues([[toDate(op.date), op.number, kind, op.description,
     op.cashIn || "", op.cashOut || ""]]);
+  sh.getRange(row, 2).setNote(APP_NOTE);
   sh.getRange(row, 1).setNumberFormat("d.m.yyyy");
+}
+
+// Returns `value` if the cell accepts it. If the cell is a dropdown that rejects other values, returns
+// the dropdown choice that matches (with `contains`, a choice found inside the text: "1x Hotdog" -> "Hot dog"),
+// or "" when none or several match.
+function fitToDropdown(cell, value, contains) {
+  const rule = cell.getDataValidation();
+  if (!rule || rule.getAllowInvalid()) return value;
+  const C = SpreadsheetApp.DataValidationCriteria;
+  const type = rule.getCriteriaType();
+  let choices;
+  if (type === C.VALUE_IN_LIST) choices = rule.getCriteriaValues()[0];
+  else if (type === C.VALUE_IN_RANGE) choices = [].concat.apply([], rule.getCriteriaValues()[0].getValues());
+  else return value;
+  choices = choices.map(String).filter(c => c.trim() !== "");
+  const key = s => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+  const exact = choices.filter(c => key(c) === key(value));
+  if (exact.length) return exact[0];
+  if (!contains) return "";
+  const hits = choices.filter(c => key(value).indexOf(key(c)) !== -1);
+  return hits.length === 1 ? hits[0] : "";
 }
 
 function clearEntry(number) {
   const sh = bookSheet();
   const row = findRow(sh, 2, number, footerRow(sh));
-  if (row) sh.getRange(row, 1, 1, 8).clearContent();
+  if (!row) return;
+  if (sh.getRange(row, 2).getNote() !== APP_NOTE) { skipped.push(number); return; }
+  sh.getRange(row, 1, 1, 8).clearContent();
+  sh.getRange(row, 2).setNote("");
 }
 
 function bookSheet() {
@@ -152,6 +223,12 @@ function freeBookRow(sh, end, kind) {
 
 // ---- helpers
 
+// A row the team filled in by hand: something in `cols` but no app note on its number
+function handWritten(sh, row, cols) {
+  if (sh.getRange(row, 2).getNote() === APP_NOTE) return false;
+  return cols.some(c => String(sh.getRange(row, c).getValue()).trim() !== "");
+}
+
 function getSheet(fileId, name) {
   const ss = SpreadsheetApp.openById(fileId);
   const sh = ss.getSheetByName(name);
@@ -167,13 +244,18 @@ function expectHeader(sh, col, text) {
   }
 }
 
+// "PPD 004", "ppd004" and "PPD004" are the same number
+function norm(v) {
+  return String(v).replace(/\s+/g, "").toUpperCase();
+}
+
 // First row from FIRST_ROW up to (not including) `end` whose column `col` equals `value`
 function findRow(sh, col, value, end) {
   if (end <= FIRST_ROW) return null;
-  const want = String(value).trim().toUpperCase();
+  const want = norm(value);
   const vals = sh.getRange(FIRST_ROW, col, end - FIRST_ROW, 1).getValues();
   for (let i = 0; i < vals.length; i++) {
-    if (String(vals[i][0]).trim().toUpperCase() === want) return FIRST_ROW + i;
+    if (norm(vals[i][0]) === want) return FIRST_ROW + i;
   }
   return null;
 }

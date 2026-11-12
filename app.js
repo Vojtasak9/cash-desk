@@ -17,7 +17,7 @@ const DEFAULT_STATE = () => ({
   paymentItems: [],  // {receipt, productId, name, qty, unitPrice, lineTotal}
   debts: [],         // cash book: {id, number, date, type (see KINDS), person, amount, note}
   settings: {shop_name: "Jarmark", account_name: "", iban: "", currency: "CZK", start_cash: 0},
-  sync: {url: "", key: "", lastSync: null, error: null},  // Google Sheets web app (not exported to Excel)
+  sync: {url: "", key: "", lastSync: null, error: null, numbers: {P: 0, PPD: 0, VPD: 0}},  // Google Sheets web app (not exported to Excel)
   outbox: [],        // changes waiting to be sent to Google Sheets
   lastExport: null,  // ISO time of the last Excel export
   changedSinceExport: false,
@@ -137,7 +137,9 @@ function qrSvg(text) {
 const receiptNumber = code => parseInt(String(code).replace(/\D/g, ""), 10) || 0;
 const formatReceipt = n => "P" + String(n).padStart(3, "0");  // P001, P002, ... as in the Jarmark file
 const normalizeReceipt = code => formatReceipt(receiptNumber(code));
-const nextReceipt = () => formatReceipt(Math.max(0, ...state.payments.map(p => receiptNumber(p.receipt))) + 1);
+// Continues after the highest number in the app and in Google Sheets (receipts typed there by hand count too)
+const sheetNumber = kind => (state.sync && state.sync.url && state.sync.numbers && state.sync.numbers[kind]) || 0;
+const nextReceipt = () => formatReceipt(Math.max(sheetNumber("P"), ...state.payments.map(p => receiptNumber(p.receipt))) + 1);
 const productById = id => state.products.find(p => p.id === +id);
 
 async function createPayment(order, method, received) {
@@ -213,12 +215,13 @@ const KINDS = {
 };
 const kindOf = e => KINDS[e.type] || KINDS.Expense;
 
-// PPD = příjmový pokladní doklad (cash in), VPD = výdajový pokladní doklad (cash out)
+// PPD = příjmový pokladní doklad (cash in), VPD = výdajový pokladní doklad (cash out),
+// written like the team does in Kompletní evidence: "PPD 004"
 const docPrefix = type => (KINDS[type] || KINDS.Expense).dir > 0 ? "PPD" : "VPD";
 function nextDocNumber(type) {
   const prefix = docPrefix(type);
   const used = state.debts.filter(d => String(d.number || "").startsWith(prefix)).map(d => receiptNumber(d.number));
-  return prefix + String(Math.max(0, ...used) + 1).padStart(3, "0");
+  return prefix + " " + String(Math.max(sheetNumber(prefix), ...used) + 1).padStart(3, "0");
 }
 const entryText = e => [e.person ? kindOf(e).text(e.person) : "", e.note].filter(Boolean).join(" – ") || kindOf(e).cz;
 
@@ -250,7 +253,7 @@ function debtTotals() {
 // Every change is queued in state.outbox and sent to the Apps Script web app (google-apps-script.js).
 // Works offline: the queue is kept on the device and sent when the internet is back.
 
-const opKey = op => op.type === "sale" ? "sale:" + op.receipt : "entry:" + op.number;
+const opKey = op => op.type === "sale" ? "sale:" + op.receipt : "entry:" + String(op.number).replace(/\s+/g, "");
 
 function queue(op) {
   if (!state.sync.url) return;
@@ -281,8 +284,11 @@ async function trySync() {
   renderSync();
   const ops = state.outbox.slice();
   try {
-    await callSheets({action: "sync", ops});
+    const r = await callSheets({action: "sync", ops});
     state.outbox = state.outbox.filter(o => !ops.includes(o));  // changes made meanwhile stay queued
+    if (r.skipped && r.skipped.length) {
+      toast(`${r.skipped.join(", ")} not written to Google Sheets: that number is already filled in there by hand.`, true);
+    }
     state.sync.lastSync = new Date().toISOString();
     state.sync.error = null;
   } catch (e) {
@@ -297,8 +303,9 @@ async function trySync() {
 
 // Names and prices come from Kasa / Produkty; stock and "on sale" stay as set in the app
 async function loadProductsFromSheet(sync = state.sync) {
-  const {products} = await callSheets({action: "products"}, sync);
+  const {products, numbers} = await callSheets({action: "products"}, sync);
   if (!products.length) throw new UserError('No products found in Kasa → sheet "Produkty".');
+  if (numbers) state.sync.numbers = numbers;
   let nextId = Math.max(0, ...state.products.map(p => p.id)) + 1;
   state.products = products.map(sp => {
     const old = state.products.find(p => p.name.toLowerCase() === sp.name.toLowerCase());
@@ -786,10 +793,11 @@ function renderBook() {
     <td class="num ${s.owesKasa > 0 ? "owes" : "settled"}">${money(s.owesKasa)}</td></tr>`).join("")
     || '<tr><td colspan="3" class="muted">No loans yet</td></tr>';
   const waiting = new Set(state.outbox.map(opKey));
+  const entryKey = e => "entry:" + String(e.number).replace(/\s+/g, "");
   $("#debtRows").innerHTML = state.debts.slice().reverse().map(e => `<tr><td>${esc(e.date)}</td><td><b>${esc(e.number)}</b></td>
     <td>${esc(kindOf(e).en)}<br><small class="muted">${esc(kindOf(e).cz)}</small></td><td>${esc(entryText(e))}</td>
     <td class="num">${kindOf(e).dir > 0 ? money(e.amount) : ""}</td><td class="num">${kindOf(e).dir < 0 ? money(e.amount) : ""}</td>
-    <td>${waiting.has("entry:" + e.number) ? '<small class="muted">not sent yet</small>' : ""}</td>
+    <td>${waiting.has(entryKey(e)) ? '<small class="muted">not sent yet</small>' : ""}</td>
     <td><button class="link bad" data-ddel="${e.id}">delete</button></td></tr>`).join("")
     || '<tr><td colspan="8" class="muted">Nothing yet</td></tr>';
   $("#peopleList").innerHTML = totals.map(s => `<option value="${esc(s.person)}">`).join("");
@@ -862,8 +870,11 @@ $("#gsSave").onclick = guard(async () => {
   state.sync = {...state.sync, url, key, error: null};
   if (firstTime && (state.payments.length || state.debts.length) &&
       confirm("Also send the receipts and cash book entries that are already in the app?")) {
-    state.payments.forEach(p => queue(saleOp(p)));
+    // never overwrite receipts the team already wrote into the sheet by hand
+    const taken = state.payments.filter(p => receiptNumber(p.receipt) <= sheetNumber("P"));
+    state.payments.filter(p => !taken.includes(p)).forEach(p => queue(saleOp(p)));
     state.debts.forEach(e => queue(entryOp(e)));
+    if (taken.length) alert(`${taken.map(p => p.receipt).join(", ")} not sent: these numbers are already used in the Prodej sheet.`);
   }
   if (!url) state.outbox = [];
   await save(false);
@@ -947,7 +958,7 @@ function renderAll() {
 function migrate() {
   const d = DEFAULT_STATE();
   state.settings = {...d.settings, ...state.settings};
-  state.sync ||= d.sync;
+  state.sync = {...d.sync, ...(state.sync || {})};
   state.outbox ||= [];
   for (const e of state.debts) {
     if (!KINDS[e.type]) e.type = "Expense";
