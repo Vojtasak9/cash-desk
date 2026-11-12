@@ -218,10 +218,27 @@ const kindOf = e => KINDS[e.type] || KINDS.Expense;
 // PPD = příjmový pokladní doklad (cash in), VPD = výdajový pokladní doklad (cash out),
 // written like the team does in Kompletní evidence: "PPD 004"
 const docPrefix = type => (KINDS[type] || KINDS.Expense).dir > 0 ? "PPD" : "VPD";
+const formatDoc = (prefix, n) => prefix + " " + String(n).padStart(3, "0");
+const usedDocNumbers = prefix => new Set(state.debts.filter(d => String(d.number || "").startsWith(prefix)).map(d => receiptNumber(d.number)));
 function nextDocNumber(type) {
   const prefix = docPrefix(type);
-  const used = state.debts.filter(d => String(d.number || "").startsWith(prefix)).map(d => receiptNumber(d.number));
-  return prefix + " " + String(Math.max(sheetNumber(prefix), ...used) + 1).padStart(3, "0");
+  const used = usedDocNumbers(prefix);
+  const last = state.lastDoc && state.lastDoc[prefix];
+  // after a number was typed by hand, continue from it; otherwise after the highest in the app and the sheet
+  let n = last != null ? last + 1 : Math.max(sheetNumber(prefix), ...used) + 1;
+  while (used.has(n)) n++;
+  return formatDoc(prefix, n);
+}
+
+// "1", "ppd1", "PPD 001" -> "PPD 001" (the prefix must match money in / out)
+function parseDocNumber(text, type) {
+  const prefix = docPrefix(type);
+  const m = String(text).replace(/\s+/g, "").toUpperCase().match(/^(PPD|VPD)?0*(\d{1,6})$/);
+  if (!m || +m[2] === 0) throw new UserError(`Number must look like ${prefix} 001 (or just 1).`);
+  if (m[1] && m[1] !== prefix) {
+    throw new UserError(prefix === "PPD" ? "Money in uses PPD numbers." : "Money out uses VPD numbers.");
+  }
+  return formatDoc(prefix, +m[2]);
 }
 const entryText = e => [e.person ? kindOf(e).text(e.person) : "", e.note].filter(Boolean).join(" – ") || kindOf(e).cz;
 
@@ -787,6 +804,7 @@ function renderCash() {
 
 function renderBook() {
   renderCash();
+  suggestNumber();
   const totals = debtTotals();
   $("#debtSummary").innerHTML = totals.map(s => `<tr><td>${esc(s.person)}</td>
     <td class="num ${s.kasaOwes > 0 ? "owes" : "settled"}">${money(s.kasaOwes)}</td>
@@ -798,11 +816,13 @@ function renderBook() {
     <td>${esc(kindOf(e).en)}<br><small class="muted">${esc(kindOf(e).cz)}</small></td><td>${esc(entryText(e))}</td>
     <td class="num">${kindOf(e).dir > 0 ? money(e.amount) : ""}</td><td class="num">${kindOf(e).dir < 0 ? money(e.amount) : ""}</td>
     <td>${waiting.has(entryKey(e)) ? '<small class="muted">not sent yet</small>' : ""}</td>
-    <td><button class="link bad" data-ddel="${e.id}">delete</button></td></tr>`).join("")
+    <td><button class="link" data-dedit="${e.id}">edit</button><button class="link bad" data-ddel="${e.id}">delete</button></td></tr>`).join("")
     || '<tr><td colspan="8" class="muted">Nothing yet</td></tr>';
   $("#peopleList").innerHTML = totals.map(s => `<option value="${esc(s.person)}">`).join("");
+  $$("[data-dedit]").forEach(b => b.onclick = () => startEditEntry(state.debts.find(d => d.id === +b.dataset.dedit)));
   $$("[data-ddel]").forEach(b => b.onclick = guard(async () => {
     const e = state.debts.find(d => d.id === +b.dataset.ddel);
+    if (editingEntry === e) resetEntryForm();
     if (!confirm(`Delete ${e.number}? It is also removed from Google Sheets.`)) return;
     state.debts = state.debts.filter(d => d !== e);
     queue({type: "deleteEntry", number: e.number});
@@ -811,11 +831,44 @@ function renderBook() {
     trySync();
   }));
 }
+let editingEntry = null;
+let numberTyped = false;  // the user changed the number field themselves
+
+function suggestNumber() {
+  if (!numberTyped && !editingEntry) $("#dNumber").value = nextDocNumber($("#dType").value);
+}
+$("#dNumber").oninput = () => { numberTyped = true; };
 $("#dType").onchange = () => {
   const k = KINDS[$("#dType").value];
   $("#dPerson").placeholder = k.person ? "Person" : "Who bought it (optional)";
   $("#dNote").placeholder = k.person ? "Note (optional)" : "What was bought (e.g. Koupě paragonů)";
+  if (editingEntry && docPrefix($("#dType").value) !== docPrefix(editingEntry.type)) numberTyped = false;
+  if (!numberTyped) $("#dNumber").value = editingEntry && docPrefix($("#dType").value) === docPrefix(editingEntry.type)
+    ? editingEntry.number : nextDocNumber($("#dType").value);
 };
+
+function startEditEntry(e) {
+  editingEntry = e;
+  numberTyped = false;
+  $("#dType").value = e.type;
+  $("#dType").onchange();
+  $("#dPerson").value = e.person || ""; $("#dAmount").value = e.amount; $("#dNote").value = e.note || "";
+  $("#dNumber").value = e.number;
+  $("#dTitle").textContent = "Edit " + e.number;
+  $("#dSave").textContent = "Save";
+  $("#dCancel").style.display = "";
+  $("#dTitle").scrollIntoView({block: "center"});
+}
+function resetEntryForm() {
+  editingEntry = null;
+  numberTyped = false;
+  ["#dPerson", "#dAmount", "#dNote"].forEach(s => $(s).value = "");
+  $("#dTitle").textContent = "Money in or out";
+  $("#dSave").textContent = "Add";
+  $("#dCancel").style.display = "none";
+  suggestNumber();
+}
+$("#dCancel").onclick = resetEntryForm;
 $("#dSave").onclick = guard(async () => {
   const type = $("#dType").value, k = KINDS[type];
   const person = $("#dPerson").value.trim(), note = $("#dNote").value.trim();
@@ -823,15 +876,29 @@ $("#dSave").onclick = guard(async () => {
   if (!k.person && !note) throw new UserError("Write what was bought.");
   const amount = num($("#dAmount").value, NaN);
   if (isNaN(amount) || amount <= 0) throw new UserError("Amount must be more than 0.");
-  if (k.dir < 0 && amount > cashNow().total) {
-    if (!confirm(`There is only ${money(cashNow().total)} in the cash box. Save anyway?`)) return;
+  const number = parseDocNumber($("#dNumber").value, type);
+  const sameNumber = d => String(d.number).replace(/\s+/g, "") === number.replace(/\s+/g, "");
+  const clash = state.debts.find(d => d !== editingEntry && sameNumber(d));
+  if (clash && editingEntry) throw new UserError(`${number} is already used by another entry (${entryText(clash)}).`);
+  if (clash && !confirm(`${number} already exists (${entryText(clash)}, ${money(clash.amount)}). Replace it?`)) return;
+  const old = editingEntry || clash;
+  const cashBefore = cashNow().total + (old ? kindOf(old).dir * -old.amount : 0);
+  if (k.dir < 0 && amount > cashBefore) {
+    if (!confirm(`There is only ${money(cashBefore)} in the cash box. Save anyway?`)) return;
   }
-  const e = {id: Math.max(0, ...state.debts.map(d => d.id)) + 1, number: nextDocNumber(type), date: today(),
-             type, person, amount, note};
-  state.debts.push(e);
+  let e;
+  if (old) {
+    if (!sameNumber(old)) queue({type: "deleteEntry", number: old.number});  // number changed: clear the old row
+    Object.assign(old, {number, type, person, amount, note});
+    e = old;
+  } else {
+    e = {id: Math.max(0, ...state.debts.map(d => d.id)) + 1, number, date: today(), type, person, amount, note};
+    state.debts.push(e);
+  }
+  state.lastDoc = {...(state.lastDoc || {}), [docPrefix(type)]: receiptNumber(number)};
   queue(entryOp(e));
   await save();
-  ["#dPerson", "#dAmount", "#dNote"].forEach(s => $(s).value = "");
+  resetEntryForm();
   renderBook();
   toast(`${e.number} saved`);
   trySync();
@@ -950,6 +1017,21 @@ async function showStorageInfo() {
   $("#storageInfo").textContent = text;
 }
 
+// Products (names + prices) always come from Kasa / Produkty in Google Sheets
+let lastProductLoad = 0;
+async function refreshProducts() {
+  if (!state.sync.url || !navigator.onLine || Date.now() - lastProductLoad < 20000) return;
+  lastProductLoad = Date.now();
+  const before = JSON.stringify(state.products.map(p => [p.name, p.price]));
+  try {
+    await loadProductsFromSheet();
+    if (JSON.stringify(state.products.map(p => [p.name, p.price])) !== before) { renderOrder(); renderProducts(); }
+  } catch (e) {
+    state.sync.error = e.message;
+    renderSync();
+  }
+}
+
 function renderAll() {
   renderSettings(); renderOrder(); renderProducts(); renderBook(); renderPayments();
 }
@@ -983,11 +1065,12 @@ function migrate() {
   $("#day").value = today();
   renderAll();
   showStorageInfo();
-  if (state.sync.url && navigator.onLine) {
-    loadProductsFromSheet().then(renderAll).catch(e => { state.sync.error = e.message; renderSync(); });
-  }
+  refreshProducts();
   trySync();
   setInterval(trySync, 60000);
-  addEventListener("online", trySync);
+  setInterval(refreshProducts, 5 * 60000);
+  addEventListener("online", () => { refreshProducts(); trySync(); });
+  // an app on the Home Screen is often only resumed, not reloaded: refresh when it comes back
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshProducts(); trySync(); } });
   if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js");
 })();

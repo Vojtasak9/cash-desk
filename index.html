@@ -173,7 +173,7 @@
       <p class="muted">QR payments go to the bank account, so they are not counted here.</p>
     </div>
     <div class="card">
-      <h2>Money in or out</h2>
+      <h2 id="dTitle">Money in or out</h2>
       <div class="row">
         <select id="dType">
           <option value="LoanIn">Loan into the kasa (Zapůjčka) +</option>
@@ -186,9 +186,12 @@
         <datalist id="peopleList"></datalist>
         <input id="dAmount" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Amount" style="width:130px">
         <input id="dNote" placeholder="Note (optional)">
+        <label class="row" style="margin:0">Number <input id="dNumber" style="width:110px" autocapitalize="characters" autocomplete="off"></label>
         <button class="btn" id="dSave">Add</button>
+        <button class="btn ghost" id="dCancel" style="display:none">Cancel</button>
       </div>
-      <p class="muted">Money in gets a PPD number, money out a VPD number. Both go to "Kompletní evidence" in Google Sheets.</p>
+      <p class="muted">Money in gets a PPD number, money out a VPD number. Both go to "Kompletní evidence" in Google Sheets.
+        You can change the number - e.g. type 1 to start again from PPD 001; the next ones continue from it.</p>
     </div>
     <div class="card">
       <h2>Who owes whom</h2>
