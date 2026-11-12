@@ -318,10 +318,10 @@ async function trySync() {
   if (!state.sync.error && state.outbox.length) trySync();
 }
 
-// Names and prices come from Kasa / Produkty; stock and "on sale" stay as set in the app
+// Names and prices come from Evidence pokladny / Produkty; stock and "on sale" stay as set in the app
 async function loadProductsFromSheet(sync = state.sync) {
   const {products, numbers} = await callSheets({action: "products"}, sync);
-  if (!products.length) throw new UserError('No products found in Kasa → sheet "Produkty".');
+  if (!products.length) throw new UserError('No products found in the "Produkty" sheet of Evidence pokladny.');
   if (numbers) state.sync.numbers = numbers;
   let nextId = Math.max(0, ...state.products.map(p => p.id)) + 1;
   state.products = products.map(sp => {
@@ -931,7 +931,7 @@ $("#gsSave").onclick = guard(async () => {
     $("#gsSave").disabled = true;
     try {
       const n = await loadProductsFromSheet({url, key});
-      toast(`Connected - ${n} products loaded from Kasa`);
+      toast(`Connected - ${n} products loaded from Google Sheets`);
     } finally { $("#gsSave").disabled = false; }
   }
   state.sync = {...state.sync, url, key, error: null};
@@ -958,7 +958,7 @@ $("#gsProducts").onclick = guard(async () => {
   if (!state.sync.url) throw new UserError("Connect Google Sheets first.");
   const n = await loadProductsFromSheet();
   renderAll();
-  toast(`${n} products loaded from Kasa`);
+  toast(`${n} products loaded from Google Sheets`);
 });
 
 // ---- settings + Excel
@@ -1017,7 +1017,7 @@ async function showStorageInfo() {
   $("#storageInfo").textContent = text;
 }
 
-// Products (names + prices) always come from Kasa / Produkty in Google Sheets
+// Products (names + prices) always come from Evidence pokladny / Produkty in Google Sheets
 let lastProductLoad = 0;
 async function refreshProducts() {
   if (!state.sync.url || !navigator.onLine || Date.now() - lastProductLoad < 20000) return;

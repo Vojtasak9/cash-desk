@@ -4,7 +4,7 @@
  * The cash desk app sends its data here and this script types it into the sheets:
  *   - every receipt (P001, P002, ...)  -> "Ten Párek Evidence pokladny" / Prodej
  *   - loans and expenses (PPD / VPD)   -> "Ten Párek Evidence pokladny" / Kompletní evidence
- *   - the app loads products + prices  <- "Kasa" / Produkty
+ *   - the app loads products + prices  <- "Ten Párek Evidence pokladny" / Produkty
  *
  * It only writes plain values (date, number, goods, amount). Totals, the cash balance,
  * SUM / SUMIF etc. are your own formulas in the sheets - the script never touches them.
@@ -16,7 +16,6 @@
 const KEY = "ZMEN-ME";
 
 const EVIDENCE_ID = "1_tPsNIFdS_2jo-ZLwsGqWwZQi5xRSp0w2RpxElQPSLw";  // Ten Párek Evidence pokladny
-const KASA_ID = "1oowL1M-IIxIWIIewRS1elvtV_3ErwABPJlqN6wu1ASI";      // Kasa
 
 const SALES_SHEET = "Prodej";
 const BOOK_SHEET = "Kompletní evidence";
@@ -69,10 +68,10 @@ function applyOp(op) {
   else throw new Error("Unknown operation: " + op.type);
 }
 
-// ---- Kasa / Produkty -> app
+// ---- Produkty (in Evidence pokladny) -> app: column A product, column B price
 
 function readProducts() {
-  const sh = getSheet(KASA_ID, PRODUCTS_SHEET);
+  const sh = getSheet(EVIDENCE_ID, PRODUCTS_SHEET);
   const n = sh.getLastRow() - 1;
   if (n < 1) return [];
   return sh.getRange(2, 1, n, 2).getValues()

@@ -56,7 +56,7 @@ formulas** (SUM, SUMIF, …). The app never writes into formula columns.
 | every receipt | *Ten Párek Evidence pokladny* → **Prodej** | DATUM, ČÍSLO (P001…), TYP DOKUMENTU (Paragon), TYP ZBOŽÍ (e.g. `2x Hotdog, 1x Mini`), amount under **POKLADNA** (cash) or **BĚŽNÝ ÚČET** (QR) |
 | a cancelled receipt | the same row | TYP ZBOŽÍ starts with `STORNO`, amounts emptied |
 | money in / out of the cash box | *Ten Párek Evidence pokladny* → **Kompletní evidence** | DATUM, ČÍSLO (PPD001… in, VPD001… out), DOKUMENTY (Zapůjčka, Vrácení zapůjčky, Vydáno, Půjčka z kasy, Splátka), POPIS, POKLADNA Příjmy or Výdaje |
-| products and prices | read from *Kasa* → **Produkty** (column A name, column B price) | – |
+| products and prices | read from *Ten Párek Evidence pokladny* → **Produkty** (column A Produkt, column B Cena) | – |
 
 A receipt goes into the row that already has its number (P001, P002, …); after P020 new rows are added below.
 Cash book entries go into the first empty row above the *Celkem* totals; when none is left, a row is inserted
@@ -67,7 +67,7 @@ Without internet the app keeps working and sends everything when the connection 
 
 ### Setup (once, on a computer)
 
-The person doing this needs edit access to both *Ten Párek Evidence pokladny* and *Kasa*.
+The person doing this needs edit access to *Ten Párek Evidence pokladny*.
 
 1. Open **Ten Párek Evidence pokladny** → **Rozšíření → Apps Script** (*Extensions → Apps Script*).
 2. Delete the code that is there and paste in everything from
@@ -80,7 +80,7 @@ The person doing this needs edit access to both *Ten Párek Evidence pokladny* a
    **Rozšířené → Přejít na … (nebezpečné)** (*Advanced → Go to … (unsafe)*) → **Povolit / Allow**.
 6. Copy the **Web app URL** (it ends with `/exec`).
 7. On the iPad: **Settings & Excel → Google Sheets** → paste the URL, type the same key → **Save & connect**.
-   The products load from *Kasa → Produkty*. It asks whether to also send receipts that are already in the app.
+   The products load from the *Produkty* sheet. It asks whether to also send receipts that are already in the app.
 8. In **Settings**, set **Starting cash** to the money that is already in the box and already written in
    *Kompletní evidence* (now 500 + 235 − 35 = 700 Kč), so the app's cash matches the sheets.
 
@@ -92,12 +92,12 @@ Good to know:
   Rows typed by hand are never changed; the app shows a warning if a number is already taken.
 - Dropdown columns (TYP ZBOŽÍ, DOKUMENTY) get one of their own choices: e.g. `1x Hotdog` → *Hot dog*, with all
   items in the cell's note. A type the DOKUMENTY dropdown doesn't have is written as *Zapůjčka* (money in) or *Vydáno* (money out).
-  Give products in *Kasa → Produkty* names that contain a TYP ZBOŽÍ choice (e.g. *Párek v rohlíku Standard*) to have it filled in.
+  Give products in the *Produkty* sheet names that contain a TYP ZBOŽÍ choice (e.g. *Párek v rohlíku Standard*) to have it filled in.
 - Don't rename the sheets or move their columns – the script checks the headers and shows an error in the app
   instead of writing into the wrong place.
 - The example row P001 (*Párel v rohlíku*) is overwritten by the first real sale.
 - Write sums over open ranges like `=SUM(E3:E)` so rows added after P020 are counted too.
-- Product names and prices are changed in *Kasa → Produkty*; the app loads them every time it opens.
+- Product names and prices are changed in the *Produkty* sheet of *Ten Párek Evidence pokladny*; the app reloads them whenever it is opened or comes back to the screen.
 
 ## Hosting
 
