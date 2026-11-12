@@ -713,8 +713,26 @@ $("#day").onchange = renderPayments;
 function renderProducts() {
   $("#prodRows").innerHTML = state.products.map(p => `<tr>
     <td>${p.id}</td><td>${esc(p.name)}</td><td class="num">${money(p.price)}</td>
-    <td class="num">${p.stock == null ? "—" : p.stock}</td><td>${p.active ? "yes" : "no"}</td>
+    <td class="num qty"><button data-sd="-1" data-sid="${p.id}" aria-label="one less">−</button>
+      <input class="stock-in" data-sid="${p.id}" type="number" inputmode="numeric" min="0" step="1" value="${p.stock ?? ""}" placeholder="—" aria-label="stock of ${esc(p.name)}">
+      <button data-sd="1" data-sid="${p.id}" aria-label="one more">+</button></td><td>${p.active ? "yes" : "no"}</td>
     <td><button class="link" data-edit="${p.id}">edit</button><button class="link bad" data-del="${p.id}">delete</button></td></tr>`).join("");
+  // Stock is edited right in the list: type a number (empty = not counted) or tap − / +
+  const setStock = guard(async (id, value) => {
+    const p = productById(id);
+    p.stock = value == null ? null : Math.max(0, Math.round(value));
+    await save();
+    $(`.stock-in[data-sid="${id}"]`).value = p.stock ?? "";
+    renderGrid();
+  });
+  $$(".stock-in").forEach(i => {
+    i.onchange = () => setStock(+i.dataset.sid, i.value.trim() === "" ? null : num(i.value));
+    i.onkeydown = e => { if (e.key === "Enter") i.blur(); };
+  });
+  $$("[data-sd]").forEach(b => b.onclick = () => {
+    const p = productById(b.dataset.sid);
+    setStock(p.id, (p.stock ?? 0) + +b.dataset.sd);
+  });
   $$("[data-edit]").forEach(b => b.onclick = () => {
     const p = productById(b.dataset.edit);
     editingId = p.id;
