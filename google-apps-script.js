@@ -177,7 +177,9 @@ function fitToDropdown(cell, value, contains) {
   if (exact.length) return exact[0];
   if (!contains) return "";
   const hits = choices.filter(c => key(value).indexOf(key(c)) !== -1);
-  return hits.length === 1 ? hits[0] : "";
+  // "Hotdog" and "Hot dog" are the same product: count distinct keys, prefer the choice spelled as in the text
+  if (new Set(hits.map(key)).size !== 1) return "";
+  return hits.find(c => String(value).toLowerCase().indexOf(c.toLowerCase()) !== -1) || hits[0];
 }
 
 function clearEntry(number) {
