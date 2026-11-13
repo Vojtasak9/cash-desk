@@ -146,10 +146,15 @@ const normalizeReceipt = code => formatReceipt(receiptNumber(code));
 const sheetNumber = kind => (state.sync && state.sync.url && state.sync.numbers && state.sync.numbers[kind]) || 0;
 // After a number was set by hand, continue from it (a cancelled receipt's number may be reused);
 // otherwise continue after the highest number in the app and the sheet.
+// When connected, the sheet is the truth: numbers deleted there are free again (delete PPD 1-5 -> next is PPD 001).
+// Only numbers still waiting to be sent count on top of the sheet.
+const sheetKnown = () => !!(state.sync && state.sync.url && state.sync.numbers);
+const pendingNumbers = prefix => state.outbox.map(o => String(o.number || "")).filter(s => s.startsWith(prefix)).map(receiptNumber);
 function nextReceipt() {
-  const taken = new Set(ppdUsed());
+  const taken = new Set(sheetKnown() ? pendingNumbers("PPD") : ppdUsed());
   let n = state.nextP != null ? state.nextP
-    : Math.max(sheetNumber("PPD"), ...taken, ...state.payments.map(p => receiptNumber(p.receipt))) + 1;
+    : Math.max(sheetKnown() ? sheetNumber("PPD") : 0, ...taken,
+               ...(sheetKnown() ? [] : state.payments.map(p => receiptNumber(p.receipt)))) + 1;
   while (taken.has(n)) n++;
   return formatReceipt(n);
 }
@@ -264,7 +269,7 @@ const usedDocNumbers = prefix => new Set([...state.debts.filter(d => String(d.nu
                                            ...(prefix === "PPD" ? state.payments.map(p => receiptNumber(p.receipt)) : [])]);
 function nextDocNumber(type) {
   const prefix = docPrefix(type);
-  const used = usedDocNumbers(prefix);
+  const used = sheetKnown() ? new Set(pendingNumbers(prefix)) : usedDocNumbers(prefix);
   const last = state.lastDoc && state.lastDoc[prefix];
   // after a number was typed by hand, continue from it; otherwise after the highest in the app and the sheet
   let n = last != null ? last + 1 : Math.max(sheetNumber(prefix), ...used) + 1;
@@ -348,6 +353,11 @@ async function trySync() {
   try {
     const r = await callSheets({action: "sync", ops});
     state.outbox = state.outbox.filter(o => !ops.includes(o));  // changes made meanwhile stay queued
+    // what we just wrote is now in the sheet; the next refresh replaces this with the sheet's real numbers
+    if (state.sync.numbers) ops.forEach(o => {
+      const m = String(o.number || "").match(/^(PPD|VPD|ID)/);
+      if (m && !o.void && o.type !== "deleteEntry") state.sync.numbers[m[1]] = Math.max(state.sync.numbers[m[1]] || 0, receiptNumber(o.number));
+    });
     if (r.day) { state.sync.day = r.day; renderCash(); }
     if (r.skipped && r.skipped.length) {
       toast(`${r.skipped.join(", ")} not written to Google Sheets: that number is already filled in there by hand.`, true);
@@ -368,7 +378,12 @@ async function trySync() {
 async function loadProductsFromSheet(sync = state.sync) {
   const {products, numbers, day} = await callSheets({action: "products"}, sync);
   if (!products.length) throw new UserError('No products found in the "Produkty" sheet of Viper.');
-  if (numbers) state.sync.numbers = numbers;
+  if (numbers) {
+    // rows were deleted in the sheet: drop numbers typed by hand so counting restarts after what is left
+    const old = state.sync.numbers || {};
+    if (["PPD", "VPD", "ID"].some(k => (numbers[k] || 0) < (old[k] || 0))) { state.nextP = null; state.lastDoc = {}; }
+    state.sync.numbers = numbers;
+  }
   state.sync.day = day || null;
   let nextId = Math.max(0, ...state.products.map(p => p.id)) + 1;
   state.products = products.map(sp => {
