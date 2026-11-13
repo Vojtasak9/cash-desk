@@ -179,10 +179,10 @@ function buildDay(ss, d) {
   sh.getRange("C5").setFormula("=SUM(I" + FIRST + ":J" + LAST + ")");
   sh.getRange("A2:C5").setFontWeight("bold"); auto(sh.getRange("C2:C5")); money(sh.getRange("C2:C5"));
   sh.getRange("E2:E5").setValues([
-    [(prev ? "= hotovost na konci " + DAY(d - 1) + " + " : "= ") + "hotovost z Půjčky pro tento den (SUMIF) + SUM sloupce Hotově"],
-    [(prev ? "= účet na konci " + DAY(d - 1) + " + " : "= ") + "účet z Půjčky pro tento den (SUMIF) + SUM sloupce QR"],
-    ["= Hotovost v kase + Na účtu"],
-    ["= SUM sloupců Hotově a QR (co jsme dnes utržili)"]]);
+    ["Vzorec: " + (prev ? "hotovost na konci " + DAY(d - 1) + " + " : "") + "hotovost z Půjčky pro tento den (SUMIF) + SUM sloupce Hotově"],
+    ["Vzorec: " + (prev ? "účet na konci " + DAY(d - 1) + " + " : "") + "účet z Půjčky pro tento den (SUMIF) + SUM sloupce QR"],
+    ["Vzorec: Hotovost v kase + Na účtu"],
+    ["Vzorec: SUM sloupců Hotově a QR (co jsme dnes utržili)"]]);
   sh.getRange("E2:E5").setFontStyle("italic");
 
   const hdr = ["Číslo (PPD)", "Čas", "Produkt", "Počet", "Cena za kus", "Celkem", "Spropitné", "Platba (prázdné = hotově)", "Hotově", "QR", "Poznámka"];
