@@ -8,7 +8,7 @@
  *   Sklad         Naskladněno (you type) - Prodáno (SUMIF from the day sheets) = Zbývá
  *   Typy pohybů   lookup table: what each kind of money movement does (Půjčky reads it with VLOOKUP)
  *   Půjčky        loans, expenses, advances...; formulas work out the cash and who owes whom
- *   Den 1, Den 2  one row per product sold: Produkt + Počet -> price, total, cash/QR by formulas;
+ *   Den 1..Den 4 one row per product sold: Produkt + Počet -> price, total, cash/QR by formulas;
  *                 at the top: cash in the kasa now, money on the account, all money, today's sales
  *
  * The spreadsheet uses Czech settings, so formulas use ";" between arguments.
@@ -22,7 +22,7 @@ const VIPER_ID = "1ZsqWHUY1iF5czN0nYmrUwboyXHMJ65mTZn6niF1sxLk";
 
 const S = {products: "Produkty", stock: "Sklad", types: "Typy pohybů", moves: "Půjčky"};
 const DAY = d => "Den " + d;
-const DAYS = 2;
+const DAYS = 4;
 const FIRST = 7;      // day sheets: summary rows 1-5, header row 6, sales from row 7
 const LAST = 400;
 const MOVES_LAST = 200;
@@ -61,6 +61,21 @@ function rebuildViper() {
   SpreadsheetApp.flush();
 }
 
+// Adds the missing day sheets (up to DAYS) and redoes Sklad, keeping everything already typed in
+function addMissingDays() {
+  const ss = SpreadsheetApp.openById(VIPER_ID);
+  for (let d = 1; d <= DAYS; d++) if (!ss.getSheetByName(DAY(d))) buildDay(ss, d);
+  const old = ss.getSheetByName(S.stock);
+  const stocked = old ? old.getRange(2, 2, PRODUCTS_LAST - 1, 1).getValues() : null;
+  if (old) { old.setName("old" + Date.now()); SpreadsheetApp.flush(); }
+  buildStock(ss);
+  const sh = ss.getSheetByName(S.stock);
+  if (stocked) sh.getRange(2, 2, PRODUCTS_LAST - 1, 1).setValues(stocked);
+  ss.setActiveSheet(sh); ss.moveActiveSheet(2);
+  if (old) ss.deleteSheet(old);
+  SpreadsheetApp.flush();
+}
+
 const money = r => r.setNumberFormat('#,##0 "Kč"');
 const head = r => r.setFontWeight("bold").setBackground(BLUE).setWrap(true).setVerticalAlignment("middle");
 const typed = r => r.setBackground(YELLOW);   // you type here
@@ -69,10 +84,10 @@ const auto = r => r.setBackground(GREY);      // a formula fills this
 function buildProducts(ss) {
   const sh = ss.insertSheet(S.products);
   sh.getRange("A1:B1").setValues([["Produkt", "Cena za kus"]]); head(sh.getRange("A1:B1"));
-  sh.getRange("A2:B4").setValues([["Párek v rohlíku", 40], ["Hot dog", 55], ["Addon", 5]]);
+  sh.getRange("A2:B4").setValues([["Standard", 35], ["Mini", 25], ["Hotdog", 70]]);
   typed(sh.getRange("A2:B" + PRODUCTS_LAST)); money(sh.getRange("B2:B" + PRODUCTS_LAST));
   sh.getRange("D1:D3").setValues([["Žlutě = píšete vy."], ["Šedě = počítá vzorec."],
-    ["Nový produkt napište na první volný řádek. Objeví se sám v Sklad i v nabídce v Den 1 / Den 2."]]);
+    ["Nový produkt napište na první volný řádek. Objeví se sám v Sklad i v nabídce v listech Den 1 až Den " + DAYS + "."]]);
   sh.setColumnWidth(1, 180); sh.setColumnWidth(4, 520); sh.setFrozenRows(1);
 }
 
@@ -128,7 +143,7 @@ function buildTypes(ss) {
 
 function buildMoves(ss) {
   const sh = ss.insertSheet(S.moves);
-  sh.getRange("A1:K1").setValues([["Datum", "Den (1 nebo 2)", "Číslo", "Typ (co se stalo)", "Kdo", "Popis", "Částka",
+  sh.getRange("A1:K1").setValues([["Datum", "Den (1 až " + DAYS + ")", "Číslo", "Typ (co se stalo)", "Kdo", "Popis", "Částka",
                                    "Platba (prázdné = hotově)", "Hotovost +/-", "Účet +/-", "Kasa mu dluží +/-"]]);
   head(sh.getRange("A1:K1"));
   const T = "'" + S.types + "'!$A$3:$C$" + (TYPES.length + 2);
