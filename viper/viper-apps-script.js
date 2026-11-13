@@ -49,6 +49,8 @@ function rebuildViper() {
   const ss = SpreadsheetApp.openById(VIPER_ID);
   const tmp = ss.insertSheet("tmp" + Date.now());
   ss.getSheets().forEach(sh => { if (sh.getSheetId() !== tmp.getSheetId()) ss.deleteSheet(sh); });
+  SpreadsheetApp.flush();
+  Utilities.sleep(2000);  // Sheets needs a moment before a deleted sheet's name can be used again
   buildProducts(ss);
   buildStock(ss);
   buildTypes(ss);

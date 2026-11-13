@@ -173,10 +173,14 @@ async function createPayment(order, method, received) {
   if (!lines.length) throw new UserError("The order is empty.");
   total = round2(total);
   let change = null;
+  // The typed amount is what we keep and what is saved (paid 30 for 25 -> 30 saved, 5 is a tip)
+  const goods = total;
+  let tip = 0;
   if (method === "Cash" && received !== "" && received != null) {
-    received = num(received);
-    if (received < total) throw new UserError("Received cash is less than the total.");
-    change = round2(received - total);
+    received = num(received, NaN);
+    if (isNaN(received) || received < 0) throw new UserError("Type the amount you received.");
+    tip = round2(received - goods);
+    total = round2(received);
   } else {
     received = null;
   }
@@ -192,7 +196,7 @@ async function createPayment(order, method, received) {
   state.payments.push({
     receipt, date: today(), time: nowTime(),
     items: lines.map(l => `${l.qty}x ${l.p.name}`).join(", "),
-    total, method, received, change, status: "OK",
+    total, goods, tip, method, received, change, status: "OK",
   });
   for (const {p, qty, lineTotal} of lines) {
     state.paymentItems.push({receipt, productId: p.id, name: p.name, qty, unitPrice: p.price, lineTotal});
@@ -722,7 +726,7 @@ $("#payCash").onclick = guard(() => {
 });
 $("#cashReceived").oninput = e => {
   const ch = num(e.target.value) - orderTotal();
-  $("#cashChange").textContent = e.target.value === "" ? "-" : ch < 0 ? "not enough" : money(ch);
+  $("#cashChange").textContent = e.target.value === "" ? "-" : (ch >= 0 ? "+" : "") + money(ch);
 };
 $("#cashConfirm").onclick = () => pay("Cash", $("#cashReceived").value);
 
