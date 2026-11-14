@@ -65,6 +65,7 @@ function rebuildViper() {
   buildTypes(ss);
   buildMoves(ss);
   for (let d = 1; d <= DAYS; d++) buildDay(ss, d);
+  buildMovesForFull(ss);
   buildFull(ss);
   ss.deleteSheet(tmp);
   ss.setActiveSheet(ss.getSheetByName(DAY(1)));
@@ -188,7 +189,11 @@ function buildMoves(ss) {
     ["Vpravo nahoře: SUMIF sečte, kolik kasa dluží každému."]]);
   sh.getRange("M32").setFontWeight("bold");
   sh.setColumnWidth(4, 160); sh.setColumnWidth(6, 220); sh.setColumnWidth(13, 140); sh.setColumnWidth(14, 220); sh.setFrozenRows(1);
-  // columns P-X: the same rows prepared for the FULL sheet
+}
+
+// Půjčky columns P-X: the same rows prepared for the FULL sheet (built after the day sheets, it reads their dates)
+function buildMovesForFull(ss) {
+  const sh = sheet(ss, S.moves);
   sh.getRange("P1:X1").setValues([FULL_HEAD.slice(0, 9).map(h => "pro FULL: " + h)]); auto(sh.getRange("P1:X1"));
   const h = [];
   // no Datum typed -> the date of that day's sheet (column B = day number)
