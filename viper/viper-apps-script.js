@@ -191,9 +191,11 @@ function buildMoves(ss) {
   // columns P-X: the same rows prepared for the FULL sheet
   sh.getRange("P1:X1").setValues([FULL_HEAD.slice(0, 9).map(h => "pro FULL: " + h)]); auto(sh.getRange("P1:X1"));
   const h = [];
+  // no Datum typed -> the date of that day's sheet (column B = day number)
+  const dayDates = []; for (let d = 1; d <= DAYS; d++) dayDates.push("'" + DAY(d) + "'!$C$1");
   for (let r = 2; r <= MOVES_LAST; r++) {
     const on = 'IF($P' + r + '="";"";';
-    h.push(['=IF(OR($A' + r + '="";$C' + r + '="");"";$A' + r + '+ROW()/10000000)', '=' + on + '$C' + r + ')',
+    h.push(['=IF($C' + r + '="";"";IF($A' + r + '<>"";INT($A' + r + ');IFERROR(INT(CHOOSE($B' + r + ';' + dayDates.join(";") + '));0))+ROW()/10000000)', '=' + on + '$C' + r + ')',
             '=' + on + '$D' + r + '&IF($E' + r + '="";"";" - "&$E' + r + ')&IF($F' + r + '="";"";": "&$F' + r + '))', '', '',
             '=' + on + 'MAX(N($I' + r + ');0))', '=' + on + 'MAX(-N($I' + r + ');0))',
             '=' + on + 'MAX(N($J' + r + ');0))', '=' + on + 'MAX(-N($J' + r + ');0))']);
@@ -265,12 +267,12 @@ function buildDay(ss, d) {
   // columns R-Z: the same rows prepared for the FULL sheet (row 5 = the day's PPD, rows 7+ = P and VBU)
   sh.getRange("R6:Z6").setValues([FULL_HEAD.slice(0, 9).map(h => "pro FULL: " + h)]); auto(sh.getRange("R6:Z6"));
   sh.getRange("R5:Z5").setFormulas([[
-    '=IF(AND(N($F$1)=0;$E$1="");"";$C$1+1-1/100000)', '=IF(R5="";"";IF($E$1="";"PPD (den neuzavřen)";$E$1))',
+    '=IF(AND(N($F$1)=0;$E$1="");"";INT($C$1)+1-1/100000)', '=IF(R5="";"";IF($E$1="";"PPD (den neuzavřen)";$E$1))',
     '=IF(R5="";"";"Tržba v hotovosti za ' + DAY(d) + ' (součet paragonů P)")', '', '', '=IF(R5="";"";$F$1)', '', '', '']]);
   const h = [];
   for (let r = FIRST; r <= LAST; r++) {
     const on = 'IF($R' + r + '="";"";';
-    h.push(['=IF($C' + r + '="";"";$C$1+IF(ISNUMBER($B' + r + ');MOD($B' + r + ';1);IFERROR(TIMEVALUE($B' + r + ');1/2))+ROW()/10000000)',
+    h.push(['=IF($C' + r + '="";"";INT($C$1)+IF(ISNUMBER($B' + r + ');MOD($B' + r + ';1);IFERROR(TIMEVALUE($B' + r + ');1/2))+ROW()/10000000)',
             '=' + on + '$A' + r + ')',
             '=' + on + '$C' + r + '&IF($H' + r + '="QR";" - prodej (QR)";" - prodej (paragon, hotovost je v uzávěrce PPD)"))',
             '=' + on + '$E' + r + ')', '=' + on + '$D' + r + ')', '', '', '=' + on + 'N($J' + r + '))', '']);
