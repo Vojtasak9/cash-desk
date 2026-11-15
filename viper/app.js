@@ -837,13 +837,15 @@ $("#autoPrint").onchange = guard(async () => { state.settings.autoPrint = $("#au
 
 // ---- 58 mm receipt: logo, name, number, date, items, total. Printed through the system print dialog
 // (on the Mac pick the receipt printer, paper 58 mm, margins none).
+// file / print job name: "14.11.2026 P001"
+const receiptName = p => { const d = p.date.split("-").map(Number); return d[2] + "." + d[1] + "." + d[0] + " " + p.receipt; };
 function receiptHtml(p) {
   const items = state.paymentItems.filter(i => i.receipt === p.receipt);
   const kc = n => String(Math.round(n * 100) / 100).replace(".", ",") + " Kč";
   const date = p.date.split("-").map(Number);
   const rows = items.map(i => `<tr><td>${i.qty}x ${esc(i.name.toLowerCase())}</td><td>${kc(i.lineTotal)}</td></tr>`).join("")
     + (p.tip ? `<tr><td>spropitné</td><td>${kc(p.tip)}</td></tr>` : "");
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(p.receipt)}</title><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(receiptName(p))}</title><style>
     @page { size: 58mm auto; margin: 0; }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
@@ -875,7 +877,12 @@ function printReceipt(receipt) {
   f.onload = () => {
     const imgs = [...f.contentDocument.images];
     Promise.all(imgs.map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })))
-      .then(() => { f.contentWindow.focus(); f.contentWindow.print(); });
+      .then(() => {
+        const title = document.title;
+        document.title = receiptName(p);
+        f.contentWindow.focus(); f.contentWindow.print();
+        setTimeout(() => { document.title = title; }, 1000);
+      });
   };
   f.srcdoc = receiptHtml(p);
 }
