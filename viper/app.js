@@ -137,11 +137,17 @@ function qrSvg(text) {
 // ---------------------------------------------------------------- business logic
 
 const receiptNumber = code => parseInt(String(code).replace(/\D/g, ""), 10) || 0;
-// Sales are PPD documents (příjmový pokladní doklad) and share the PPD numbering with money coming in
-const formatReceipt = n => "PPD " + String(n).padStart(3, "0");
-const ppdUsed = (skip) => [...state.payments.filter(p => p !== skip && p.status !== "VOID").map(p => receiptNumber(p.receipt)),
-                           ...state.debts.filter(d => String(d.number || "").startsWith("PPD")).map(d => receiptNumber(d.number))];
-const normalizeReceipt = code => formatReceipt(receiptNumber(code));
+// Cash sales are paragons P001, P002...; QR sales are VBU (bank), sharing VBU numbers with other bank movements.
+// PPD is only for money lent to the kasa and for the one "day total" at the end of each day.
+const salePrefix = method => method === "QR" ? "VBU" : "P";
+const prefixOf = code => (String(code).replace(/\s+/g, "").toUpperCase().match(/^[A-Z]+/) || [""])[0];
+const formatReceipt = (n, prefix = "P") => prefix + String(n).padStart(3, "0");
+const normalizeReceipt = code => formatReceipt(receiptNumber(code), prefixOf(code) || "P");
+// numbers this device already used with a prefix (sales + cash book + closed days)
+const localUsed = prefix => [
+  ...state.payments.filter(p => p.status !== "VOID" && prefixOf(p.receipt) === prefix).map(p => receiptNumber(p.receipt)),
+  ...state.debts.filter(d => prefixOf(d.number) === prefix).map(d => receiptNumber(d.number)),
+  ...Object.values(state.closedDays || {}).filter(n => prefixOf(n) === prefix).map(receiptNumber)];
 // Continues after the highest number in the app and in Google Sheets (receipts typed there by hand count too)
 const sheetNumber = kind => (state.sync && state.sync.url && state.sync.numbers && state.sync.numbers[kind]) || 0;
 // After a number was set by hand, continue from it (a cancelled receipt's number may be reused);
@@ -149,25 +155,26 @@ const sheetNumber = kind => (state.sync && state.sync.url && state.sync.numbers 
 // When connected, the sheet is the truth: numbers deleted there are free again (delete PPD 1-5 -> next is PPD 001).
 // Only numbers still waiting to be sent count on top of the sheet.
 const sheetKnown = () => !!(state.sync && state.sync.url && state.sync.numbers);
-const pendingNumbers = prefix => state.outbox.map(o => String(o.number || "")).filter(s => s.startsWith(prefix)).map(receiptNumber);
-function nextReceipt() {
-  const taken = new Set(sheetKnown() ? pendingNumbers("PPD") : ppdUsed());
-  let n = state.nextP != null ? state.nextP
-    : Math.max(sheetKnown() ? sheetNumber("PPD") : 0, ...taken,
-               ...(sheetKnown() ? [] : state.payments.map(p => receiptNumber(p.receipt)))) + 1;
+const pendingNumbers = prefix => state.outbox.filter(o => !o.void && o.type !== "deleteEntry")
+  .map(o => String(o.number || "")).filter(s => prefixOf(s) === prefix).map(receiptNumber);
+// The next free number with this prefix (P, VBU, PPD, VPD, ID)
+function nextNumber(prefix) {
+  const taken = new Set(sheetKnown() ? pendingNumbers(prefix) : localUsed(prefix));
+  const set = state.nextNum && state.nextNum[prefix];
+  let n = set != null ? set : Math.max(sheetKnown() ? sheetNumber(prefix) : 0, 0, ...taken) + 1;
   while (taken.has(n)) n++;
-  return formatReceipt(n);
+  return formatReceipt(n, prefix);
 }
+const nextReceipt = (method = "Cash") => nextNumber(salePrefix(method));
 
+// "5" or "P5" sets the next paragon, "VBU5" the next bank number
 function setNextReceipt(text) {
-  const m = String(text).replace(/\s+/g, "").toUpperCase().match(/^(?:PPD)?0*(\d{1,6})$/);
-  if (!m || +m[1] === 0) throw new UserError("Number must look like PPD 001 (or just 1).");
-  const n = +m[1];
-  const used = state.payments.find(p => receiptNumber(p.receipt) === n && p.status !== "VOID");
+  const m = String(text).replace(/\s+/g, "").toUpperCase().match(/^(P|VBU)?0*(\d{1,6})$/);
+  if (!m || +m[2] === 0) throw new UserError("Number must look like P001 or VBU001 (or just 1 for P).");
+  const prefix = m[1] || "P", n = +m[2];
+  const used = state.payments.find(p => p.status !== "VOID" && p.receipt === formatReceipt(n, prefix));
   if (used) throw new UserError(`${used.receipt} is already used (${used.items}). Void it first to use its number again.`);
-  const entry = state.debts.find(d => String(d.number).startsWith("PPD") && receiptNumber(d.number) === n);
-  if (entry) throw new UserError(`${entry.number} is already used by a cash book entry.`);
-  state.nextP = n;
+  state.nextNum = {...(state.nextNum || {}), [prefix]: n};
 }
 const productById = id => state.products.find(p => p.id === +id);
 
@@ -196,14 +203,15 @@ async function createPayment(order, method, received) {
   } else {
     received = null;
   }
-  const receipt = nextReceipt();
+  const receipt = nextReceipt(method);
   // reusing a cancelled receipt's number: the new sale replaces it
   const old = state.payments.find(p => p.receipt === receipt);
   if (old) {
     state.payments = state.payments.filter(p => p !== old);
     state.paymentItems = state.paymentItems.filter(i => i.receipt !== receipt);
   }
-  if (state.nextP != null) state.nextP = receiptNumber(receipt) + 1;
+  const pre = salePrefix(method);
+  if (state.nextNum && state.nextNum[pre] != null) state.nextNum[pre] = receiptNumber(receipt) + 1;
   for (const {p, qty} of lines) if (p.stock != null) p.stock -= qty;
   state.payments.push({
     receipt, date: today(), time: nowTime(),
@@ -261,34 +269,47 @@ const kindOf = e => KINDS[e.type] || KINDS.Expense;
 const viaCash = e => e.payment !== "Účet";
 
 // PPD = příjmový pokladní doklad (cash in), VPD = výdajový pokladní doklad (cash out),
-// written like "PPD 004"
-// ID = interní doklad, for movements where no money moves (someone paid for the kasa, advance receipt)
-const docPrefix = type => { const d = (KINDS[type] || KINDS.Expense).dir; return d > 0 ? "PPD" : d < 0 ? "VPD" : "ID"; };
-const formatDoc = (prefix, n) => prefix + " " + String(n).padStart(3, "0");
-const usedDocNumbers = prefix => new Set([...state.debts.filter(d => String(d.number || "").startsWith(prefix)).map(d => receiptNumber(d.number)),
-                                           ...(prefix === "PPD" ? state.payments.map(p => receiptNumber(p.receipt)) : [])]);
-function nextDocNumber(type) {
-  const prefix = docPrefix(type);
-  const used = sheetKnown() ? new Set(pendingNumbers(prefix)) : usedDocNumbers(prefix);
+// VBU = bank account (in or out), ID = interní doklad (no money moves). Written like "PPD004".
+const docPrefix = (type, payment = "Hotově") => {
+  const d = (KINDS[type] || KINDS.Expense).dir;
+  return d === 0 ? "ID" : payment === "Účet" ? "VBU" : d > 0 ? "PPD" : "VPD";
+};
+const formatDoc = (prefix, n) => formatReceipt(n, prefix);
+function nextDocNumber(type, payment) {
+  const prefix = docPrefix(type, payment);
   const last = state.lastDoc && state.lastDoc[prefix];
-  // after a number was typed by hand, continue from it; otherwise after the highest in the app and the sheet
-  let n = last != null ? last + 1 : Math.max(sheetNumber(prefix), ...used) + 1;
-  while (used.has(n)) n++;
-  return formatDoc(prefix, n);
+  if (last != null) {  // after a number was typed by hand, continue from it
+    state.nextNum = {...(state.nextNum || {}), [prefix]: last + 1};
+    state.lastDoc[prefix] = null;
+  }
+  return nextNumber(prefix);
 }
 
-// "1", "ppd1", "PPD 001" -> "PPD 001" (the prefix must match money in / out)
-function parseDocNumber(text, type) {
-  const prefix = docPrefix(type);
-  const m = String(text).replace(/\s+/g, "").toUpperCase().match(/^(PPD|VPD|ID)?0*(\d{1,6})$/);
-  if (!m || +m[2] === 0) throw new UserError(`Number must look like ${prefix} 001 (or just 1).`);
+// "1", "ppd1", "PPD 001" -> "PPD001" (the prefix must match the kind of movement)
+function parseDocNumber(text, type, payment) {
+  const prefix = docPrefix(type, payment);
+  const m = String(text).replace(/\s+/g, "").toUpperCase().match(/^(PPD|VPD|VBU|ID)?0*(\d{1,6})$/);
+  if (!m || +m[2] === 0) throw new UserError(`Number must look like ${prefix}001 (or just 1).`);
   if (m[1] && m[1] !== prefix) {
-    throw new UserError({PPD: "Money in uses PPD numbers.", VPD: "Money out uses VPD numbers.", ID: "When no money moves, the number is ID."}[prefix]);
+    throw new UserError({PPD: "Cash in uses PPD numbers.", VPD: "Cash out uses VPD numbers.",
+                         VBU: "Money through the bank account uses VBU numbers.", ID: "When no money moves, the number is ID."}[prefix]);
   }
-  if (prefix === "PPD" && state.payments.some(p => p.status !== "VOID" && receiptNumber(p.receipt) === +m[2])) {
-    throw new UserError(`PPD ${String(+m[2]).padStart(3, "0")} is already used by a sale.`);
+  if (prefix === "VBU" && state.payments.some(p => p.status !== "VOID" && p.receipt === formatDoc("VBU", +m[2]))) {
+    throw new UserError(`${formatDoc("VBU", +m[2])} is already used by a QR sale.`);
   }
   return formatDoc(prefix, +m[2]);
+}
+
+// ---- end of day: one PPD that takes the day's cash paragons (P) into the cash book
+async function closeDay(date = today()) {
+  state.closedDays ||= {};
+  const number = state.closedDays[date] || nextNumber("PPD");
+  state.closedDays[date] = number;
+  if (state.nextNum && state.nextNum.PPD != null) state.nextNum.PPD = receiptNumber(number) + 1;
+  queue({type: "closeDay", number, date});
+  await save();
+  trySync();
+  return number;
 }
 const entryText = e => [e.person, e.note].filter(Boolean).join(" – ") || kindOf(e).cz;
 
@@ -355,7 +376,7 @@ async function trySync() {
     state.outbox = state.outbox.filter(o => !ops.includes(o));  // changes made meanwhile stay queued
     // what we just wrote is now in the sheet; the next refresh replaces this with the sheet's real numbers
     if (state.sync.numbers) ops.forEach(o => {
-      const m = String(o.number || "").match(/^(PPD|VPD|ID)/);
+      const m = String(o.number || "").match(/^(PPD|VPD|VBU|ID|P)/);
       if (m && !o.void && o.type !== "deleteEntry") state.sync.numbers[m[1]] = Math.max(state.sync.numbers[m[1]] || 0, receiptNumber(o.number));
     });
     if (r.day) { state.sync.day = r.day; renderCash(); }
@@ -381,7 +402,7 @@ async function loadProductsFromSheet(sync = state.sync) {
   if (numbers) {
     // rows were deleted in the sheet: drop numbers typed by hand so counting restarts after what is left
     const old = state.sync.numbers || {};
-    if (["PPD", "VPD", "ID"].some(k => (numbers[k] || 0) < (old[k] || 0))) { state.nextP = null; state.lastDoc = {}; }
+    if (Object.keys(old).some(k => (numbers[k] || 0) < (old[k] || 0))) { state.nextNum = {}; state.lastDoc = {}; }
     state.sync.numbers = numbers;
   }
   state.sync.day = day || null;
@@ -715,7 +736,7 @@ const orderTotal = () => round2(Object.entries(order).reduce((s, [id, q]) => s +
 
 function renderOrder() {
   for (const id of Object.keys(order)) if (!productById(id)) delete order[id];
-  $("#nextReceipt").textContent = nextReceipt();
+  $("#nextReceipt").textContent = nextReceipt("Cash") + " / " + nextReceipt("QR");
   $("#orderLines").innerHTML = Object.entries(order).map(([id, q]) => {
     const p = productById(id);
     return `<tr><td>${esc(p.name)}</td>
@@ -727,14 +748,21 @@ function renderOrder() {
   renderGrid();
 }
 
+$("#closeDay").onclick = guard(async () => {
+  const cash = (dailyTotals().find(d => d.date === today()) || {cash: 0}).cash;
+  const again = state.closedDays && state.closedDays[today()];
+  if (!confirm(again ? `Today already has ${again}. Send it again (it updates the same PPD)?`
+                     : `Close today: one PPD with today's cash paragons (${money(cash)}) goes into the sheet. Continue?`)) return;
+  toast("Day closed: " + await closeDay());
+});
 $("#clearOrder").onclick = () => { order = {}; renderOrder(); };
 $("#nextReceipt").onclick = guard(async () => {
-  const text = prompt("Number for the next receipt (e.g. 1 or P001). The following ones continue from it.", nextReceipt());
+  const text = prompt("Next number: P001 for cash, VBU001 for QR (just 1 = P001). The following ones continue from it.", nextReceipt());
   if (text == null || text.trim() === "") return;
   setNextReceipt(text);
   await save(false);
   renderOrder();
-  toast("Next receipt: " + nextReceipt());
+  toast("Next: " + nextReceipt("Cash") + " / " + nextReceipt("QR"));
 });
 
 $("#payQr").onclick = guard(() => {
@@ -744,8 +772,8 @@ $("#payQr").onclick = guard(() => {
   $("#qrAmount").textContent = money(total);
   $("#qrMissing").style.display = missing ? "" : "none";
   $("#qrConfirm").style.display = missing ? "none" : "";
-  $("#qrBox").innerHTML = missing ? "" : qrSvg(spayd(total, nextReceipt()));
-  $("#qrNote").textContent = missing ? "" : `${nextReceipt()} · ${state.settings.iban}`;
+  $("#qrBox").innerHTML = missing ? "" : qrSvg(spayd(total, nextReceipt("QR")));
+  $("#qrNote").textContent = missing ? "" : `${nextReceipt("QR")} · ${state.settings.iban}`;
   $("#qrModal").classList.add("open");
 });
 $("#qrToSettings").onclick = () => { closeModals(); $("[data-tab=settings]").click(); };
@@ -909,7 +937,7 @@ let editingEntry = null;
 let numberTyped = false;  // the user changed the number field themselves
 
 function suggestNumber() {
-  if (!numberTyped && !editingEntry) $("#dNumber").value = nextDocNumber($("#dType").value);
+  if (!numberTyped && !editingEntry) $("#dNumber").value = nextDocNumber($("#dType").value, $("#dPay").value);
 }
 $("#dNumber").oninput = () => { numberTyped = true; };
 $("#dType").onchange = () => {
@@ -917,19 +945,24 @@ $("#dType").onchange = () => {
   $("#dPerson").placeholder = k.person ? "Person" : "Person (optional)";
   $("#dNote").placeholder = k.person ? "Note (optional)" : "What it was for (e.g. ubrousky)";
   $("#dHelp").textContent = k.en + (k.dir ? "" : " - no money moves now") + ".";
-  if (editingEntry && docPrefix($("#dType").value) !== docPrefix(editingEntry.type)) numberTyped = false;
-  if (!numberTyped) $("#dNumber").value = editingEntry && docPrefix($("#dType").value) === docPrefix(editingEntry.type)
-    ? editingEntry.number : nextDocNumber($("#dType").value);
+  renumberEntry();
 };
-$("#dPay").onchange = () => {};
+// the number's prefix depends on the type AND on cash / account (PPD, VPD, VBU or ID)
+function renumberEntry() {
+  const t = $("#dType").value, pay = $("#dPay").value;
+  if (editingEntry && docPrefix(t, pay) !== prefixOf(editingEntry.number)) numberTyped = false;
+  if (!numberTyped) $("#dNumber").value = editingEntry && docPrefix(t, pay) === prefixOf(editingEntry.number)
+    ? editingEntry.number : nextDocNumber(t, pay);
+}
+$("#dPay").onchange = renumberEntry;
 
 function startEditEntry(e) {
   editingEntry = e;
   numberTyped = false;
   $("#dType").value = e.type;
+  $("#dPay").value = viaCash(e) ? "Hotově" : "Účet";
   $("#dType").onchange();
   $("#dPerson").value = e.person || ""; $("#dAmount").value = e.amount; $("#dNote").value = e.note || "";
-  $("#dPay").value = viaCash(e) ? "Hotově" : "Účet";
   $("#dNumber").value = e.number;
   $("#dTitle").textContent = "Edit " + e.number;
   $("#dSave").textContent = "Save";
@@ -955,7 +988,7 @@ $("#dSave").onclick = guard(async () => {
   const payment = $("#dPay").value;
   const amount = num($("#dAmount").value, NaN);
   if (isNaN(amount) || amount <= 0) throw new UserError("Amount must be more than 0.");
-  const number = parseDocNumber($("#dNumber").value, type);
+  const number = parseDocNumber($("#dNumber").value, type, payment);
   const sameNumber = d => String(d.number).replace(/\s+/g, "") === number.replace(/\s+/g, "");
   const clash = state.debts.find(d => d !== editingEntry && sameNumber(d));
   if (clash && editingEntry) throw new UserError(`${number} is already used by another entry (${entryText(clash)}).`);
@@ -974,7 +1007,7 @@ $("#dSave").onclick = guard(async () => {
     e = {id: Math.max(0, ...state.debts.map(d => d.id)) + 1, number, date: today(), type, person, amount, note, payment};
     state.debts.push(e);
   }
-  state.lastDoc = {...(state.lastDoc || {}), [docPrefix(type)]: receiptNumber(number)};
+  state.lastDoc = {...(state.lastDoc || {}), [docPrefix(type, payment)]: receiptNumber(number)};
   queue(entryOp(e));
   await save();
   resetEntryForm();
@@ -1124,7 +1157,7 @@ function migrate() {
   state.outbox ||= [];
   for (const e of state.debts) {
     if (!KINDS[e.type]) e.type = "Expense";
-    if (!e.number) e.number = nextDocNumber(e.type);
+    if (!e.number) e.number = nextDocNumber(e.type, e.payment);
   }
 }
 
