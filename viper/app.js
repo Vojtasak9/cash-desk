@@ -1150,7 +1150,7 @@ $("#sSave").onclick = guard(async () => {
 function renderBackupBanner() {
   const lastDay = state.lastExport ? state.lastExport.slice(0, 10) : null;
   const unsavedSales = state.changedSinceExport && state.payments.some(p => !lastDay || p.date >= lastDay);
-  $("#backupBanner").classList.toggle("show", unsavedSales && (!lastDay || lastDay < today() || hoursSinceExport() >= 4));
+  $("#backupBanner").classList.toggle("show", !(state.sync.url && state.sync.key) && unsavedSales && (!lastDay || lastDay < today() || hoursSinceExport() >= 4));
 }
 const hoursSinceExport = () => state.lastExport ? (Date.now() - new Date(state.lastExport)) / 36e5 : Infinity;
 
