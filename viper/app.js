@@ -198,6 +198,7 @@ async function createPayment(order, method, received) {
   if (method === "Cash" && received !== "" && received != null) {
     received = num(received, NaN);
     if (isNaN(received) || received < 0) throw new UserError("Type the amount you received.");
+    if (received < goods) throw new UserError(`Received ${money(received)} is less than the total ${money(goods)}.`);
     tip = round2(received - goods);
     total = round2(received);
   } else {
