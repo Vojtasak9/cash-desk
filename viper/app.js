@@ -878,6 +878,11 @@ function printReceipt(receipt) {
     const imgs = [...f.contentDocument.images];
     Promise.all(imgs.map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })))
       .then(() => {
+        const d = f.contentDocument;
+        const mm = Math.ceil(d.body.getBoundingClientRect().height * 25.4 / 96) + 4;
+        const st = d.createElement("style");
+        st.textContent = `@page { size: 58mm ${mm}mm; margin: 0; } html, body { height: ${mm}mm; overflow: hidden; }`;
+        d.head.appendChild(st);
         const title = document.title;
         document.title = receiptName(p);
         f.contentWindow.focus(); f.contentWindow.print();
