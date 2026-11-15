@@ -50,7 +50,8 @@ const BLUE = "#dfe7f5", YELLOW = "#fff6db", GREY = "#f1f3f4";
 function rebuildViper() {
   const ss = SpreadsheetApp.openById(VIPER_ID);
   const oldProducts = ss.getSheetByName(S.products)
-    ? ss.getSheetByName(S.products).getRange(2, 1, PRODUCTS_LAST - 1, 2).getValues().filter(r => String(r[0]).trim() !== "") : [];
+    ? ss.getSheetByName(S.products).getRange(2, 1, PRODUCTS_LAST - 1, 1 + DAYS).getValues().filter(r => String(r[0]).trim() !== "")
+      .map(r => r.map((v, i) => i > 1 && v === "" ? r[1] : v)) : [];  // old sheet with one price -> same price every day
   const tmp = ss.insertSheet("tmp" + Date.now());
   ss.getSheets().forEach(sh => { if (sh.getSheetId() !== tmp.getSheetId()) ss.deleteSheet(sh); });
   SpreadsheetApp.flush();
@@ -58,8 +59,8 @@ function rebuildViper() {
   buildProducts(ss);
   if (oldProducts.length) {  // keep the products that were there
     const sh = ss.getSheetByName(S.products);
-    sh.getRange(2, 1, PRODUCTS_LAST - 1, 2).clearContent();
-    sh.getRange(2, 1, oldProducts.length, 2).setValues(oldProducts);
+    sh.getRange(2, 1, PRODUCTS_LAST - 1, 1 + DAYS).clearContent();
+    sh.getRange(2, 1, oldProducts.length, 1 + DAYS).setValues(oldProducts);
   }
   buildStock(ss);
   buildTypes(ss);
@@ -94,12 +95,17 @@ const auto = r => r.setBackground(GREY);      // a formula fills this
 
 function buildProducts(ss) {
   const sh = ss.insertSheet(S.products);
-  sh.getRange("A1:B1").setValues([["Produkt", "Cena za kus"]]); head(sh.getRange("A1:B1"));
-  sh.getRange("A2:B4").setValues([["Standard", 35], ["Mini", 25], ["Hotdog", 70]]);
-  typed(sh.getRange("A2:B" + PRODUCTS_LAST)); money(sh.getRange("B2:B" + PRODUCTS_LAST));
-  sh.getRange("D1:D3").setValues([["Žlutě = píšete vy."], ["Šedě = počítá vzorec."],
+  // one price column per day: column B = Den 1, C = Den 2, ...
+  const hdr = ["Produkt"]; for (let d = 1; d <= DAYS; d++) hdr.push("Cena " + DAY(d));
+  sh.getRange(1, 1, 1, hdr.length).setValues([hdr]); head(sh.getRange(1, 1, 1, hdr.length));
+  const start = [["Standard", 35], ["Mini", 25], ["Hotdog", 70]].map(r => [r[0]].concat(Array(DAYS).fill(r[1])));
+  sh.getRange(2, 1, start.length, hdr.length).setValues(start);
+  typed(sh.getRange(2, 1, PRODUCTS_LAST - 1, hdr.length)); money(sh.getRange(2, 2, PRODUCTS_LAST - 1, DAYS));
+  const note = hdr.length + 2;
+  sh.getRange(1, note, 4, 1).setValues([["Žlutě = píšete vy."], ["Šedě = počítá vzorec."],
+    ["Každý den může mít jinou cenu: napište ji do sloupce toho dne."],
     ["Nový produkt napište na první volný řádek. Objeví se sám v Sklad i v nabídce v listech Den 1 až Den " + DAYS + "."]]);
-  sh.setColumnWidth(1, 180); sh.setColumnWidth(4, 520); sh.setFrozenRows(1);
+  sh.setColumnWidth(1, 180); sh.setColumnWidth(note, 520); sh.setFrozenRows(1);
 }
 
 function buildStock(ss) {
@@ -243,7 +249,7 @@ function buildDay(ss, d) {
   const f = [], pay = [];
   for (let r = FIRST; r <= LAST; r++) {
     f.push([
-      '=IF(C' + r + '="";"";IFERROR(VLOOKUP(C' + r + ';' + S.products + '!$A$2:$B$' + PRODUCTS_LAST + ';2;FALSE);0))',
+      '=IF(C' + r + '="";"";IFERROR(VLOOKUP(C' + r + ';' + S.products + '!$A$2:$' + String.fromCharCode(65 + DAYS) + '$' + PRODUCTS_LAST + ';' + (1 + d) + ';FALSE);0))',
       '=IF(C' + r + '="";"";D' + r + '*E' + r + ')',
     ]);
     pay.push(['=IF(A' + r + '="";"";IF(LEFT(A' + r + ';3)="VBU";"QR";"Hotově"))']);
@@ -265,7 +271,7 @@ function buildDay(ss, d) {
   sh.getRange(FIRST, 3, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation()
     .requireValueInRange(ss.getSheetByName(S.products).getRange("A2:A" + PRODUCTS_LAST), true).build());
   sh.getRange("G1").setValue("Prodej = Číslo (P001 hotově / VBU001 QR), Produkt a Počet (žlutě). Víc produktů na jednom dokladu = víc řádků se stejným číslem.");
-  sh.getRange("G2").setValue("Cena = VLOOKUP z Produkty, Celkem = Počet × Cena, Platba = IF(LEFT(číslo;3)=\"VBU\"). F1 = SUM hotovosti = částka uzávěrky PPD (E1).");
+  sh.getRange("G2").setValue("Cena = VLOOKUP z Produkty (sloupec Cena " + DAY(d) + "), Celkem = Počet × Cena, Platba = IF(LEFT(číslo;3)=\"VBU\"). F1 = SUM hotovosti = částka uzávěrky PPD (E1).");
   sh.getRange("G1:G2").setFontStyle("italic");
   sh.setColumnWidth(1, 120); sh.setColumnWidth(3, 170); sh.setColumnWidth(8, 120); sh.setColumnWidth(11, 200); sh.setFrozenRows(6);
 
@@ -337,7 +343,7 @@ function doPost(e) {
     if (req.key !== KEY) throw new Error("Wrong key - type the same key into the app as in the script.");
     const ss = SpreadsheetApp.openById(VIPER_ID);
     if (req.action === "products") {
-      out = {ok: true, products: readProducts(ss), numbers: usedNumbers(ss), day: dayInfo(ss, req.date)};
+      out = {ok: true, products: readProducts(ss, req.date), numbers: usedNumbers(ss), day: dayInfo(ss, req.date)};
     } else if (req.action === "sync") {
       const lock = LockService.getScriptLock();
       lock.waitLock(30000);
@@ -365,14 +371,17 @@ function doPost(e) {
 }
 
 // Products with price and Zbývá from Sklad (null when Naskladněno is empty)
-function readProducts(ss) {
-  const pr = sheet(ss, S.products).getRange(2, 1, PRODUCTS_LAST - 1, 2).getValues();
+// price = the column of the day sheet for this date (Den 1 when no day matches yet)
+function readProducts(ss, iso) {
+  let n = 1;
+  try { if (iso) n = daySheet(ss, iso, false).n; } catch (e) {}
+  const pr = sheet(ss, S.products).getRange(2, 1, PRODUCTS_LAST - 1, 1 + DAYS).getValues();
   const st = sheet(ss, S.stock).getRange(2, 2, PRODUCTS_LAST - 1, 4 + DAYS).getValues();
   const out = [];
   pr.forEach((r, i) => {
     if (String(r[0]).trim() === "") return;
     const left = st[i][st[i].length - 1];
-    out.push({name: String(r[0]).trim(), price: toNumber(r[1]), stock: st[i][0] === "" || left === "" ? null : toNumber(left)});
+    out.push({name: String(r[0]).trim(), price: toNumber(r[n]), stock: st[i][0] === "" || left === "" ? null : toNumber(left)});
   });
   return out;
 }
