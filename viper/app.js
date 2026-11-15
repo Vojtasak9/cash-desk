@@ -804,6 +804,7 @@ const pay = guard(async (method, received) => {
     order = {};
     renderOrder(); renderProducts(); renderCash();
     toast(`${r.receipt} saved · ${money(r.total)}` + (r.change != null ? ` · change ${money(r.change)}` : ""));
+    if (state.settings.autoPrint) printReceipt(r.receipt);
   } finally {
     paying = false;
     $$("#qrConfirm, #cashConfirm").forEach(b => b.disabled = false);
@@ -822,8 +823,9 @@ function renderPayments() {
   $("#payRows").innerHTML = list.map(p => `<tr class="${p.status === "VOID" ? "void" : ""}">
     <td><b>${esc(p.receipt)}</b></td><td>${esc(p.time)}</td><td>${esc(p.items)}</td><td>${esc(p.method)}</td>
     <td class="num">${money(p.total)}</td>
-    <td>${p.status === "VOID" ? "voided" : `<button class="link bad" data-void="${esc(p.receipt)}">void</button>`}</td></tr>`
+    <td>${p.status === "VOID" ? "voided" : `<button class="link" data-print="${esc(p.receipt)}">print</button> <button class="link bad" data-void="${esc(p.receipt)}">void</button>`}</td></tr>`
   ).join("") || '<tr><td colspan="6" class="muted">No receipts this day</td></tr>';
+  $$("[data-print]").forEach(b => b.onclick = () => printReceipt(b.dataset.print));
   $$("[data-void]").forEach(b => b.onclick = guard(async () => {
     if (!confirm(`Void ${b.dataset.void}? Its items go back to stock.`)) return;
     await voidPayment(b.dataset.void);
@@ -831,6 +833,52 @@ function renderPayments() {
   }));
 }
 $("#day").onchange = renderPayments;
+$("#autoPrint").onchange = guard(async () => { state.settings.autoPrint = $("#autoPrint").checked; await save(false); });
+
+// ---- 58 mm receipt: logo, name, number, date, items, total. Printed through the system print dialog
+// (on the Mac pick the receipt printer, paper 58 mm, margins none).
+function receiptHtml(p) {
+  const items = state.paymentItems.filter(i => i.receipt === p.receipt);
+  const kc = n => String(Math.round(n * 100) / 100).replace(".", ",") + " Kč";
+  const date = p.date.split("-").map(Number);
+  const rows = items.map(i => `<tr><td>${i.qty}x ${esc(i.name.toLowerCase())}</td><td>${kc(i.lineTotal)}</td></tr>`).join("")
+    + (p.tip ? `<tr><td>spropitné</td><td>${kc(p.tip)}</td></tr>` : "");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(p.receipt)}</title><style>
+    @page { size: 58mm auto; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { width: 48mm; margin: 0 auto; padding: 2mm 0 8mm; font: 11pt/1.3 Arial, Helvetica, sans-serif; color: #000; }
+    .c { text-align: center; }
+    .logo { height: 22mm; display: block; margin: 0 auto 2mm; }
+    .name { width: 44mm; display: block; margin: 0 auto 3mm; }
+    .no { font-size: 14pt; font-weight: bold; }
+    table { width: 100%; border-collapse: collapse; margin: 2mm 0; }
+    td { padding: .5mm 0; vertical-align: top; }
+    td + td { text-align: right; white-space: nowrap; padding-left: 2mm; }
+    .tot td { border-top: .4mm solid #000; padding-top: 1.5mm; font-weight: bold; font-size: 13pt; }
+  </style></head><body>
+    <img class="logo" src="img/logo.png" alt=""><img class="name" src="img/name.png" alt="TEN PÁREK">
+    <div class="c no">${esc(p.receipt)}</div>
+    <div class="c">${date[2]}.${date[1]}.${date[0]}</div>
+    <table>${rows}<tr class="tot"><td>Celkem</td><td>${kc(p.total)}</td></tr></table>
+  </body></html>`;
+}
+function printReceipt(receipt) {
+  const p = state.payments.find(x => x.receipt === receipt);
+  if (!p) return toast("Receipt not found", true);
+  const old = document.getElementById("printFrame");
+  if (old) old.parentNode.removeChild(old);
+  const f = document.createElement("iframe");
+  f.id = "printFrame";
+  f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(f);
+  f.onload = () => {
+    const imgs = [...f.contentDocument.images];
+    Promise.all(imgs.map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })))
+      .then(() => { f.contentWindow.focus(); f.contentWindow.print(); });
+  };
+  f.srcdoc = receiptHtml(p);
+}
 
 // ---- products
 function renderProducts() {
@@ -1151,6 +1199,7 @@ function renderAll() {
 // Fill in fields that older versions of the app didn't have
 function migrate() {
   const d = DEFAULT_STATE();
+  setTimeout(() => { $("#autoPrint").checked = !!(state.settings && state.settings.autoPrint); });
   state.settings = {...d.settings, ...state.settings};
   state.sync = {...d.sync, ...(state.sync || {})};
   if (!state.sync.url) state.sync.url = d.sync.url;
