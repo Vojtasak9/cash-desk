@@ -95,7 +95,6 @@
   <nav>
     <button data-tab="register" class="active">Register</button>
     <button data-tab="receipts">Receipts &amp; day total</button>
-    <button data-tab="products">Products &amp; stock</button>
     <button data-tab="book">Cash book</button>
     <button data-tab="settings">Settings &amp; Excel</button>
   </nav>
@@ -141,29 +140,6 @@
       <table>
         <thead><tr><th>Receipt</th><th>Time</th><th>Items</th><th>Method</th><th class="num">Total</th><th></th></tr></thead>
         <tbody id="payRows"></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- PRODUCTS -->
-  <section id="products" class="tab">
-    <div class="card">
-      <p class="muted" id="productsNote" style="display:none;font-size:15px">Names, prices and stock come from the <b>Viper</b> sheet (Produkty, Sklad)
-        and are loaded each time the app opens - change them there. Stock and "on sale" are kept in the app.</p>
-      <h2 id="prodFormTitle">Add product</h2>
-      <div class="row">
-        <input id="pName" placeholder="Name">
-        <input id="pPrice" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Price" style="width:120px">
-        <input id="pStock" type="number" inputmode="numeric" step="1" placeholder="Stock (empty = not counted)" style="width:240px">
-        <label class="row" style="margin:0"><input type="checkbox" id="pActive" checked style="min-height:auto;width:22px;height:22px"> on sale</label>
-        <button class="btn" id="pSave">Save</button>
-        <button class="btn ghost" id="pCancel" style="display:none">Cancel</button>
-      </div>
-    </div>
-    <div class="card">
-      <table>
-        <thead><tr><th>ID</th><th>Name</th><th class="num">Price</th><th class="num">Stock</th><th>On sale</th><th></th></tr></thead>
-        <tbody id="prodRows"></tbody>
       </table>
     </div>
   </section>

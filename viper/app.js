@@ -416,7 +416,7 @@ async function loadProductsFromSheet(sync = state.sync) {
   state.products = products.map(sp => {
     const old = state.products.find(p => p.name.toLowerCase() === sp.name.toLowerCase());
     const stock = sp.stock == null ? null : Math.round(sp.stock);
-    return old ? {...old, name: sp.name, price: sp.price, stock} : {id: nextId++, name: sp.name, price: sp.price, stock, active: true};
+    return old ? {...old, name: sp.name, price: sp.price, stock, active: true} : {id: nextId++, name: sp.name, price: sp.price, stock, active: true};
   });
   await save(false);
   return products.length;
@@ -707,7 +707,6 @@ async function importExcel(file) {
 // ---------------------------------------------------------------- UI
 
 let order = {};
-let editingId = null;
 
 $$("nav button").forEach(b => b.onclick = () => {
   $$("nav button, .tab").forEach(x => x.classList.remove("active"));
@@ -808,7 +807,7 @@ const pay = guard(async (method, received) => {
     const r = await createPayment(order, method, received);
     closeModals();
     order = {};
-    renderOrder(); renderProducts(); renderCash();
+    renderOrder(); renderCash();
     toast(`${r.receipt} saved · ${money(r.total)}` + (r.change != null ? ` · change ${money(r.change)}` : ""));
     if (state.settings.autoPrint) printReceipt(r.receipt);
   } finally {
@@ -840,7 +839,7 @@ function renderPayments() {
   $$("[data-void]").forEach(b => b.onclick = guard(async () => {
     if (!confirm(`Void ${b.dataset.void}? Its items go back to stock.`)) return;
     await voidPayment(b.dataset.void);
-    renderOrder(); renderProducts(); renderPayments(); renderCash();
+    renderOrder(); renderPayments(); renderCash();
   }));
 }
 $("#day").onchange = renderPayments;
@@ -904,67 +903,6 @@ function printReceipt(receipt) {
   };
   f.srcdoc = receiptHtml(p);
 }
-
-// ---- products
-function renderProducts() {
-  $("#prodRows").innerHTML = state.products.map(p => `<tr>
-    <td>${p.id}</td><td>${esc(p.name)}</td><td class="num">${money(p.price)}</td>
-    <td class="num qty"><button data-sd="-1" data-sid="${p.id}" aria-label="one less">−</button>
-      <input class="stock-in" data-sid="${p.id}" type="number" inputmode="numeric" min="0" step="1" value="${p.stock ?? ""}" placeholder="—" aria-label="stock of ${esc(p.name)}">
-      <button data-sd="1" data-sid="${p.id}" aria-label="one more">+</button></td><td>${p.active ? "yes" : "no"}</td>
-    <td><button class="link" data-edit="${p.id}">edit</button><button class="link bad" data-del="${p.id}">delete</button></td></tr>`).join("");
-  // Stock is edited right in the list: type a number (empty = not counted) or tap − / +
-  const setStock = guard(async (id, value) => {
-    const p = productById(id);
-    p.stock = value == null ? null : Math.max(0, Math.round(value));
-    await save();
-    $(`.stock-in[data-sid="${id}"]`).value = p.stock ?? "";
-    renderGrid();
-  });
-  $$(".stock-in").forEach(i => {
-    i.onchange = () => setStock(+i.dataset.sid, i.value.trim() === "" ? null : num(i.value));
-    i.onkeydown = e => { if (e.key === "Enter") i.blur(); };
-  });
-  $$("[data-sd]").forEach(b => b.onclick = () => {
-    const p = productById(b.dataset.sid);
-    setStock(p.id, (p.stock ?? 0) + +b.dataset.sd);
-  });
-  $$("[data-edit]").forEach(b => b.onclick = () => {
-    const p = productById(b.dataset.edit);
-    editingId = p.id;
-    $("#prodFormTitle").textContent = "Edit " + p.name;
-    $("#pName").value = p.name; $("#pPrice").value = p.price; $("#pStock").value = p.stock ?? "";
-    $("#pActive").checked = p.active; $("#pCancel").style.display = "";
-    $("#pName").scrollIntoView({block: "center"});
-  });
-  $$("[data-del]").forEach(b => b.onclick = guard(async () => {
-    if (!confirm("Delete this product?")) return;
-    state.products = state.products.filter(p => p.id !== +b.dataset.del);
-    await save();
-    renderProducts(); renderOrder();
-  }));
-}
-function resetProductForm() {
-  editingId = null;
-  $("#prodFormTitle").textContent = "Add product";
-  ["#pName", "#pPrice", "#pStock"].forEach(s => $(s).value = "");
-  $("#pActive").checked = true;
-  $("#pCancel").style.display = "none";
-}
-$("#pCancel").onclick = resetProductForm;
-$("#pSave").onclick = guard(async () => {
-  const name = $("#pName").value.trim();
-  if (!name) throw new UserError("Product name is required.");
-  const price = num($("#pPrice").value, NaN);
-  if (isNaN(price) || price < 0) throw new UserError("Price must be a number (0 or more).");
-  const stockRaw = $("#pStock").value.trim();
-  const fields = {name, price, stock: stockRaw === "" ? null : Math.round(num(stockRaw)), active: $("#pActive").checked};
-  if (editingId) Object.assign(productById(editingId), fields);
-  else state.products.push({id: Math.max(0, ...state.products.map(p => p.id)) + 1, ...fields});
-  await save();
-  resetProductForm(); renderProducts(); renderOrder();
-  toast("Product saved");
-});
 
 // ---- cash book + current cash
 function renderCash() {
@@ -1154,7 +1092,6 @@ function renderSettings() {
   $("#sShop").value = s.shop_name; $("#sName").value = s.account_name;
   $("#sIban").value = s.iban; $("#sCur").value = s.currency; $("#sStart").value = s.start_cash || 0;
   $("#gsUrl").value = state.sync.url; $("#gsKey").value = state.sync.key;
-  $("#productsNote").style.display = state.sync.url ? "" : "none";
   renderSync();
   $("#lastExport").textContent = state.lastExport
     ? "Last Excel file saved: " + new Date(state.lastExport).toLocaleString()
@@ -1211,7 +1148,7 @@ async function refreshProducts() {
   const before = JSON.stringify(state.products.map(p => [p.name, p.price]));
   try {
     await loadProductsFromSheet();
-    if (JSON.stringify(state.products.map(p => [p.name, p.price])) !== before) { renderOrder(); renderProducts(); }
+    if (JSON.stringify(state.products.map(p => [p.name, p.price])) !== before) renderOrder();
   } catch (e) {
     state.sync.error = e.message;
     renderSync();
@@ -1219,7 +1156,7 @@ async function refreshProducts() {
 }
 
 function renderAll() {
-  renderSettings(); renderOrder(); renderProducts(); renderBook(); renderPayments();
+  renderSettings(); renderOrder(); renderBook(); renderPayments();
 }
 
 // Fill in fields that older versions of the app didn't have
