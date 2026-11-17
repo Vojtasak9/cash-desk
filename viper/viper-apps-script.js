@@ -8,9 +8,11 @@
  *   Sklad         Naskladněno (you type) - Prodáno (SUMIF from the day sheets) = Zbývá
  *   Typy pohybů   lookup table: what each kind of money movement does (Půjčky reads it with VLOOKUP)
  *   Půjčky        loans, expenses, advances...; formulas work out the cash and who owes whom
- *   Den 1..Den 4  one row per product sold: Produkt + Počet -> price, total, cash/QR by formulas;
- *                 numbers: P001.. = paragon (cash), VBU001.. = bank (QR); E1 = the day's PPD (cash total of all P)
+ *   Den 1..Den 4  one row per product sold: Produkt + Počet + Platba -> price, total, cash/QR by formulas;
+ *                 every sale is a paragon P001.. (cash and QR); end of day: E1 = PPD (cash total), E2 = VBU (QR total)
  *   FULL          everything in time order (PPD, VPD, P, VBU, ID) - only formulas, nobody types here
+ *
+ * repairFormulas() writes all formulas again without touching typed data.
  *
  * The spreadsheet uses Czech settings, so formulas use ";" between arguments.
  * rebuildViper() deletes all sheets and builds them again (run it from the editor).
@@ -115,6 +117,20 @@ function buildStock(ss) {
   cols.push("Prodáno celkem", "Zbývá (ks)");
   sh.getRange(1, 1, 1, cols.length).setValues([cols]); head(sh.getRange(1, 1, 1, cols.length));
   const n = PRODUCTS_LAST - 1, totalCol = 3 + DAYS, leftCol = totalCol + 1;
+  stockFormulas(sh);
+  auto(sh.getRange(2, 1, n, 1)); typed(sh.getRange(2, 2, n, 1)); auto(sh.getRange(2, 3, n, leftCol - 2));
+  sh.getRange(1, leftCol + 2, 5, 1).setValues([
+    ["Jak to funguje:"],
+    ["Naskladněno = kolik kusů jsme nakoupili (píšete vy)."],
+    ["Prodáno Den 1 = SUMIF: sečte Počet ve všech řádcích listu Den 1, kde je tento produkt."],
+    ["Prodáno celkem = SUM všech dnů."],
+    ["Zbývá = Naskladněno - Prodáno celkem."]]);
+  sh.getRange(1, leftCol + 2).setFontWeight("bold");
+  sh.setColumnWidth(1, 180); sh.setColumnWidth(leftCol + 2, 520); sh.setFrozenRows(1);
+}
+
+function stockFormulas(sh) {
+  const n = PRODUCTS_LAST - 1, totalCol = 3 + DAYS, leftCol = totalCol + 1;
   const L = c => String.fromCharCode(64 + c);
   const f = [];
   for (let r = 2; r <= PRODUCTS_LAST; r++) {
@@ -137,15 +153,6 @@ function buildStock(ss) {
   }
   sh.getRange(2, totalCol, n, 1).setFormulas(t);
   sh.getRange(2, leftCol, n, 1).setFormulas(left);
-  auto(sh.getRange(2, 1, n, 1)); typed(sh.getRange(2, 2, n, 1)); auto(sh.getRange(2, 3, n, leftCol - 2));
-  sh.getRange(1, leftCol + 2, 5, 1).setValues([
-    ["Jak to funguje:"],
-    ["Naskladněno = kolik kusů jsme nakoupili (píšete vy)."],
-    ["Prodáno Den 1 = SUMIF: sečte Počet ve všech řádcích listu Den 1, kde je tento produkt."],
-    ["Prodáno celkem = SUM všech dnů."],
-    ["Zbývá = Naskladněno - Prodáno celkem."]]);
-  sh.getRange(1, leftCol + 2).setFontWeight("bold");
-  sh.setColumnWidth(1, 180); sh.setColumnWidth(leftCol + 2, 520); sh.setFrozenRows(1);
 }
 
 function buildTypes(ss) {
@@ -163,16 +170,8 @@ function buildMoves(ss) {
   sh.getRange("A1:K1").setValues([["Datum", "Den (1 až " + DAYS + ")", "Číslo", "Typ (co se stalo)", "Kdo", "Popis", "Částka",
                                    "Platba (prázdné = hotově)", "Hotovost +/-", "Účet +/-", "Kasa mu dluží +/-"]]);
   head(sh.getRange("A1:K1"));
-  const T = "'" + S.types + "'!$A$3:$C$" + (TYPES.length + 2);
-  const f = [];
-  for (let r = 2; r <= MOVES_LAST; r++) {
-    f.push([
-      '=IF($D' + r + '="";"";IF($H' + r + '="Účet";0;$G' + r + '*VLOOKUP($D' + r + ';' + T + ';2;FALSE)))',
-      '=IF($D' + r + '="";"";IF($H' + r + '="Účet";$G' + r + '*VLOOKUP($D' + r + ';' + T + ';2;FALSE);0))',
-      '=IF($D' + r + '="";"";$G' + r + '*VLOOKUP($D' + r + ';' + T + ';3;FALSE))',
-    ]);
-  }
-  sh.getRange(2, 9, f.length, 3).setFormulas(f);
+  sh.getRange("M1:N1").setValues([["Kdo", "Kasa mu dluží (+) / dluží kase (−)"]]); head(sh.getRange("M1:N1"));
+  movesFormulas(sh);
   typed(sh.getRange("A2:H" + MOVES_LAST)); auto(sh.getRange("I2:K" + MOVES_LAST));
   money(sh.getRange("G2:G" + MOVES_LAST)); money(sh.getRange("I2:K" + MOVES_LAST));
   sh.getRange("A2:A" + MOVES_LAST).setNumberFormat("d.m.yyyy");
@@ -181,12 +180,6 @@ function buildMoves(ss) {
   sh.getRange("H2:H" + MOVES_LAST).setDataValidation(SpreadsheetApp.newDataValidation()
     .requireValueInList(["Hotově", "Účet"], true).build());
   sh.getRange("B2:H2").setValues([[1, "PPD001", "Zapůjčka do kasy", "Kristián", "Peníze na start (vrátit)", 500, "Hotově"]]);
-  // who owes whom
-  sh.getRange("M1:N1").setValues([["Kdo", "Kasa mu dluží (+) / dluží kase (−)"]]); head(sh.getRange("M1:N1"));
-  sh.getRange("M2").setFormula('=IFERROR(UNIQUE(FILTER(E2:E' + MOVES_LAST + ';E2:E' + MOVES_LAST + '<>""));"")');
-  const g = [];
-  for (let r = 2; r <= 30; r++) g.push(['=IF(M' + r + '="";"";SUMIF($E$2:$E$' + MOVES_LAST + ';M' + r + ';$K$2:$K$' + MOVES_LAST + '))']);
-  sh.getRange(2, 14, g.length, 1).setFormulas(g);
   auto(sh.getRange("M2:N30")); money(sh.getRange("N2:N30"));
   sh.getRange("M32:M35").setValues([
     ["Jak to funguje:"],
@@ -197,7 +190,27 @@ function buildMoves(ss) {
   sh.setColumnWidth(4, 160); sh.setColumnWidth(6, 220); sh.setColumnWidth(13, 140); sh.setColumnWidth(14, 220); sh.setFrozenRows(1);
 }
 
+// Půjčky formulas: cash / account / debt per row (VLOOKUP into Typy pohybů) and the who-owes-whom table
+function movesFormulas(sh) {
+  const T = "'" + S.types + "'!$A$3:$C$" + (TYPES.length + 2);
+  const f = [];
+  for (let r = 2; r <= MOVES_LAST; r++) {
+    f.push([
+      '=IF($D' + r + '="";"";IF($H' + r + '="Účet";0;$G' + r + '*VLOOKUP($D' + r + ';' + T + ';2;FALSE)))',
+      '=IF($D' + r + '="";"";IF($H' + r + '="Účet";$G' + r + '*VLOOKUP($D' + r + ';' + T + ';2;FALSE);0))',
+      '=IF($D' + r + '="";"";$G' + r + '*VLOOKUP($D' + r + ';' + T + ';3;FALSE))',
+    ]);
+  }
+  sh.getRange(2, 9, f.length, 3).setFormulas(f);
+  sh.getRange("M2:M30").clearContent();
+  sh.getRange("M2").setFormula('=IFERROR(UNIQUE(FILTER(E2:E' + MOVES_LAST + ';E2:E' + MOVES_LAST + '<>""));"")');
+  const g = [];
+  for (let r = 2; r <= 30; r++) g.push(['=IF(M' + r + '="";"";SUMIF($E$2:$E$' + MOVES_LAST + ';M' + r + ';$K$2:$K$' + MOVES_LAST + '))']);
+  sh.getRange(2, 14, g.length, 1).setFormulas(g);
+}
+
 // Půjčky columns P-X: the same rows prepared for the FULL sheet (built after the day sheets, it reads their dates)
+// A row counts as soon as it has a Typ (like the day sheets' SUMIF), even without a number.
 function buildMovesForFull(ss) {
   const sh = sheet(ss, S.moves);
   sh.getRange("P1:X1").setValues([FULL_HEAD.slice(0, 9).map(h => "pro FULL: " + h)]); auto(sh.getRange("P1:X1"));
@@ -206,7 +219,7 @@ function buildMovesForFull(ss) {
   const dayDates = []; for (let d = 1; d <= DAYS; d++) dayDates.push("'" + DAY(d) + "'!$C$1");
   for (let r = 2; r <= MOVES_LAST; r++) {
     const on = 'IF($P' + r + '="";"";';
-    h.push(['=IF($C' + r + '="";"";IF($A' + r + '<>"";INT($A' + r + ');IFERROR(INT(CHOOSE($B' + r + ';' + dayDates.join(";") + '));0))+ROW()/10000000)', '=' + on + '$C' + r + ')',
+    h.push(['=IF($D' + r + '="";"";IF($A' + r + '<>"";INT($A' + r + ');IFERROR(INT(CHOOSE($B' + r + ';' + dayDates.join(";") + '));0))+ROW()/10000000)', '=' + on + 'IF($C' + r + '="";"(bez čísla)";$C' + r + '))',
             '=' + on + '$D' + r + '&IF($E' + r + '="";"";" - "&$E' + r + ')&IF($F' + r + '="";"";": "&$F' + r + '))', '', '',
             '=' + on + 'MAX(N($I' + r + ');0))', '=' + on + 'MAX(-N($I' + r + ');0))',
             '=' + on + 'MAX(N($J' + r + ');0))', '=' + on + 'MAX(-N($J' + r + ');0))']);
@@ -221,89 +234,110 @@ const FULL_HEAD = ["Datum a čas", "Číslo dokladu", "Popis", "Cena za kus", "P
 
 function buildDay(ss, d) {
   const sh = ss.insertSheet(DAY(d));
-  const P = "'" + S.moves + "'!";
-  const prev = d > 1 ? "'" + DAY(d - 1) + "'!" : "";
+  dayLayout(ss, sh, d);
+  dayFormulas(sh, d);
+}
+
+// Labels, colours and checks of a day sheet (no formulas, typed values stay)
+//   row 1: Datum | Uzávěrka PPD (hotově): E1 = number, F1 = SUM Hotově
+//   row 2:         Uzávěrka VBU (QR):     E2 = number, F2 = SUM QR
+//   rows 2-5: cash, account, all money, sales of the day;  row 6 header;  sales from row 7
+function dayLayout(ss, sh, d) {
+  const prev = d > 1 ? DAY(d - 1) : "";
   sh.getRange("A1").setValue(DAY(d)).setFontWeight("bold").setFontSize(16);
   sh.getRange("B1").setValue("Datum:");
-  typed(sh.getRange("C1").setNumberFormat("d.m.yyyy"));
-  sh.getRange("D1").setValue("Uzávěrka PPD:").setFontWeight("bold");
-  typed(sh.getRange("E1"));
-  sh.getRange("F1").setFormula("=SUM(I" + FIRST + ":I" + LAST + ")"); auto(sh.getRange("F1")); money(sh.getRange("F1"));
+  typed(sh.getRange("C1")).setNumberFormat("d.m.yyyy");
+  sh.getRange("D1:D2").setValues([["Uzávěrka PPD (hotově):"], ["Uzávěrka VBU (QR):"]]).setFontWeight("bold");
+  typed(sh.getRange("E1:E2")).setFontStyle("normal");
+  auto(sh.getRange("F1:F2")); money(sh.getRange("F1:F2"));
+  sh.getRange("E3:E5").clearContent();
   sh.getRange("A2:A5").setValues([["Hotovost v kase"], ["Na účtu (QR)"], ["Peníze celkem"], ["Tržba dne"]]);
+  sh.getRange("A2:C5").setFontWeight("bold"); auto(sh.getRange("C2:C5")); money(sh.getRange("C2:C5"));
+  sh.getRange("G1:G5").setValues([
+    ["Prodej = Číslo (P001, P002… pro hotovost i QR), Produkt, Počet a Platba (žlutě). Víc produktů na jednom dokladu = víc řádků se stejným číslem."],
+    ["Cena = VLOOKUP z Produkty (sloupec Cena " + DAY(d) + "), Celkem = Počet × Cena. Prázdná Platba = hotově."],
+    ["Uzávěrka dne: PPD = F1 (součet sloupce Hotově) jde do kasy, VBU = F2 (součet sloupce QR) jde na účet."],
+    ["Hotovost v kase = " + (prev ? "konec " + prev + " + " : "") + "Půjčky pro tento den (SUMIF) + SUM Hotově. Na účtu = totéž se sloupcem QR."],
+    ["Peníze celkem = Hotovost v kase + Na účtu. Tržba dne = SUM sloupců Hotově a QR."]]).setFontStyle("italic");
+
+  const hdr = ["Číslo (P001…)", "Čas", "Produkt", "Počet", "Cena za kus", "Celkem", "Spropitné", "Platba (Hotově / QR)", "Hotově", "QR", "Poznámka"];
+  sh.getRange(6, 1, 1, hdr.length).setValues([hdr]); head(sh.getRange(6, 1, 1, hdr.length));
+  const rows = LAST - FIRST + 1;
+  typed(sh.getRange(FIRST, 1, rows, 4)); typed(sh.getRange(FIRST, 7, rows, 2)); typed(sh.getRange(FIRST, 11, rows, 1));
+  auto(sh.getRange(FIRST, 5, rows, 2)); auto(sh.getRange(FIRST, 9, rows, 2));
+  money(sh.getRange(FIRST, 5, rows, 3)); money(sh.getRange(FIRST, 9, rows, 2));
+  sh.getRange(FIRST, 3, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInRange(ss.getSheetByName(S.products).getRange("A2:A" + PRODUCTS_LAST), true).build());
+  sh.getRange(FIRST, 8, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList(["Hotově", "QR"], true).build());
+  sh.setColumnWidth(1, 120); sh.setColumnWidth(3, 170); sh.setColumnWidth(4, 150); sh.setColumnWidth(8, 120); sh.setColumnWidth(11, 200);
+  sh.setFrozenRows(6);
+  sh.getRange("R6:Z6").setValues([FULL_HEAD.slice(0, 9).map(h => "pro FULL: " + h)]);
+  auto(sh.getRange(4, 18, LAST - 3, 9)); sh.getRange(4, 18, LAST - 3, 1).setNumberFormat("d.m. h:mm");
+}
+
+// All formulas of a day sheet (also repairs them when someone overwrote or deleted some)
+function dayFormulas(sh, d) {
+  const P = "'" + S.moves + "'!";
+  const prev = d > 1 ? "'" + DAY(d - 1) + "'!" : "";
+  sh.getRange("F1").setFormula("=SUM(I" + FIRST + ":I" + LAST + ")");
+  sh.getRange("F2").setFormula("=SUM(J" + FIRST + ":J" + LAST + ")");
   const cash = "SUMIF(" + P + "$B$2:$B$" + MOVES_LAST + ";" + d + ";" + P + "$I$2:$I$" + MOVES_LAST + ")+SUM(I" + FIRST + ":I" + LAST + ")";
   const bank = "SUMIF(" + P + "$B$2:$B$" + MOVES_LAST + ";" + d + ";" + P + "$J$2:$J$" + MOVES_LAST + ")+SUM(J" + FIRST + ":J" + LAST + ")";
   sh.getRange("C2").setFormula("=" + (prev ? prev + "C2+" : "") + cash);
   sh.getRange("C3").setFormula("=" + (prev ? prev + "C3+" : "") + bank);
   sh.getRange("C4").setFormula("=C2+C3");
   sh.getRange("C5").setFormula("=SUM(I" + FIRST + ":J" + LAST + ")");
-  sh.getRange("A2:C5").setFontWeight("bold"); auto(sh.getRange("C2:C5")); money(sh.getRange("C2:C5"));
-  sh.getRange("E2:E5").setValues([
-    ["Vzorec: " + (prev ? "hotovost na konci " + DAY(d - 1) + " + " : "") + "hotovost z Půjčky pro tento den (SUMIF) + SUM sloupce Hotově"],
-    ["Vzorec: " + (prev ? "účet na konci " + DAY(d - 1) + " + " : "") + "účet z Půjčky pro tento den (SUMIF) + SUM sloupce QR"],
-    ["Vzorec: Hotovost v kase + Na účtu"],
-    ["Vzorec: SUM sloupců Hotově a QR (co jsme dnes utržili)"]]);
-  sh.getRange("E2:E5").setFontStyle("italic");
-
-  const hdr = ["Číslo (P = hotově, VBU = QR)", "Čas", "Produkt", "Počet", "Cena za kus", "Celkem", "Spropitné", "Platba (podle čísla)", "Hotově", "QR", "Poznámka"];
-  sh.getRange(6, 1, 1, hdr.length).setValues([hdr]); head(sh.getRange(6, 1, 1, hdr.length));
-  const f = [], pay = [];
+  const f = [], g = [], h = [];
   for (let r = FIRST; r <= LAST; r++) {
     f.push([
       '=IF(C' + r + '="";"";IFERROR(VLOOKUP(C' + r + ';' + S.products + '!$A$2:$' + String.fromCharCode(65 + DAYS) + '$' + PRODUCTS_LAST + ';' + (1 + d) + ';FALSE);0))',
       '=IF(C' + r + '="";"";D' + r + '*E' + r + ')',
     ]);
-    pay.push(['=IF(A' + r + '="";"";IF(LEFT(A' + r + ';3)="VBU";"QR";"Hotově"))']);
-  }
-  sh.getRange(FIRST, 5, f.length, 2).setFormulas(f);
-  sh.getRange(FIRST, 8, pay.length, 1).setFormulas(pay);
-  const g = [];
-  for (let r = FIRST; r <= LAST; r++) {
     g.push([
       '=IF(AND(C' + r + '="";G' + r + '="");"";IF(H' + r + '="QR";0;N(F' + r + ')+N(G' + r + ')))',
       '=IF(AND(C' + r + '="";G' + r + '="");"";IF(H' + r + '="QR";N(F' + r + ')+N(G' + r + ');0))',
     ]);
-  }
-  sh.getRange(FIRST, 9, g.length, 2).setFormulas(g);
-  const rows = LAST - FIRST + 1;
-  typed(sh.getRange(FIRST, 1, rows, 4)); typed(sh.getRange(FIRST, 7, rows, 1)); typed(sh.getRange(FIRST, 11, rows, 1));
-  auto(sh.getRange(FIRST, 5, rows, 2)); auto(sh.getRange(FIRST, 8, rows, 3));
-  money(sh.getRange(FIRST, 5, rows, 3)); money(sh.getRange(FIRST, 9, rows, 2));
-  sh.getRange(FIRST, 3, rows, 1).setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInRange(ss.getSheetByName(S.products).getRange("A2:A" + PRODUCTS_LAST), true).build());
-  sh.getRange("G1").setValue("Prodej = Číslo (P001 hotově / VBU001 QR), Produkt a Počet (žlutě). Víc produktů na jednom dokladu = víc řádků se stejným číslem.");
-  sh.getRange("G2").setValue("Cena = VLOOKUP z Produkty (sloupec Cena " + DAY(d) + "), Celkem = Počet × Cena, Platba = IF(LEFT(číslo;3)=\"VBU\"). F1 = SUM hotovosti = částka uzávěrky PPD (E1).");
-  sh.getRange("G1:G2").setFontStyle("italic");
-  sh.setColumnWidth(1, 120); sh.setColumnWidth(3, 170); sh.setColumnWidth(8, 120); sh.setColumnWidth(11, 200); sh.setFrozenRows(6);
-
-  // columns R-Z: the same rows prepared for the FULL sheet (row 5 = the day's PPD, rows 7+ = P and VBU)
-  sh.getRange("R6:Z6").setValues([FULL_HEAD.slice(0, 9).map(h => "pro FULL: " + h)]); auto(sh.getRange("R6:Z6"));
-  sh.getRange("R5:Z5").setFormulas([[
-    '=IF(AND(N($F$1)=0;$E$1="");"";INT($C$1)+1-1/100000)', '=IF(R5="";"";IF($E$1="";"PPD (den neuzavřen)";$E$1))',
-    '=IF(R5="";"";"Tržba v hotovosti za ' + DAY(d) + ' (součet paragonů P)")', '', '', '=IF(R5="";"";$F$1)', '', '', '']]);
-  const h = [];
-  for (let r = FIRST; r <= LAST; r++) {
+    // FULL: every P row is only for the overview, the money is in the day's PPD (cash) and VBU (QR)
     const on = 'IF($R' + r + '="";"";';
     h.push(['=IF($C' + r + '="";"";INT($C$1)+IF(ISNUMBER($B' + r + ');MOD($B' + r + ';1);IFERROR(TIMEVALUE($B' + r + ');1/2))+ROW()/10000000)',
             '=' + on + '$A' + r + ')',
-            '=' + on + '$C' + r + '&IF($H' + r + '="QR";" - prodej (QR)";" - prodej (paragon, hotovost je v uzávěrce PPD)"))',
-            '=' + on + '$E' + r + ')', '=' + on + '$D' + r + ')', '', '', '=' + on + 'N($J' + r + '))', '']);
+            '=' + on + '$C' + r + '&IF($H' + r + '="QR";" - prodej QR (peníze v uzávěrce VBU)";" - prodej hotově (peníze v uzávěrce PPD)"))',
+            '=' + on + '$E' + r + ')', '=' + on + '$D' + r + ')', '', '', '', '']);
   }
+  sh.getRange(FIRST, 5, f.length, 2).setFormulas(f);
+  sh.getRange(FIRST, 9, g.length, 2).setFormulas(g);
   sh.getRange(FIRST, 18, h.length, 9).setFormulas(h);
-  auto(sh.getRange(5, 18, LAST - 4, 9)); sh.getRange(5, 18, LAST - 4, 1).setNumberFormat("d.m. h:mm");
+  // rows 4 and 5: the day's VBU (QR total, to the account) and PPD (cash total, into the kasa)
+  sh.getRange("R4:Z5").setFormulas([
+    ['=IF(AND(N($F$2)=0;$E$2="");"";INT($C$1)+1-2/100000)', '=IF(R4="";"";IF($E$2="";"VBU (den neuzavřen)";$E$2))',
+     '=IF(R4="";"";"Tržba QR za ' + DAY(d) + ' (součet QR paragonů P)")', '', '', '', '', '=IF(R4="";"";$F$2)', ''],
+    ['=IF(AND(N($F$1)=0;$E$1="");"";INT($C$1)+1-1/100000)', '=IF(R5="";"";IF($E$1="";"PPD (den neuzavřen)";$E$1))',
+     '=IF(R5="";"";"Tržba v hotovosti za ' + DAY(d) + ' (součet hotovostních paragonů P)")', '', '', '=IF(R5="";"";$F$1)', '', '', '']]);
 }
 
 // FULL: everything from Půjčky and the day sheets in time order. Only formulas - nobody types here.
 function buildFull(ss) {
   const sh = ss.insertSheet(S.full);
   sh.getRange(1, 1, 1, FULL_HEAD.length).setValues([FULL_HEAD]); head(sh.getRange(1, 1, 1, FULL_HEAD.length));
+  fullFormulas(sh);
+  auto(sh.getRange(2, 1, FULL_LAST - 1, FULL_HEAD.length));
+  sh.getRange(2, 1, FULL_LAST - 1, 1).setNumberFormat("d.m. h:mm");
+  money(sh.getRange(2, 4, FULL_LAST - 1, 1)); money(sh.getRange(2, 6, FULL_LAST - 1, 7));
+  sh.setColumnWidth(1, 110); sh.setColumnWidth(2, 110); sh.setColumnWidth(3, 380); sh.setColumnWidth(14, 600); sh.setFrozenRows(1);
+  sh.protect().setDescription("FULL se počítá sám").setWarningOnly(true);
+}
+
+function fullFormulas(sh) {
   const parts = [], keys = [];
   for (let d = 1; d <= DAYS; d++) {
     const q = "'" + DAY(d) + "'!";
-    parts.push(q + "R5:Z5", q + "R" + FIRST + ":Z" + LAST);
-    keys.push(q + "R5:R5", q + "R" + FIRST + ":R" + LAST);
+    parts.push(q + "R4:Z5", q + "R" + FIRST + ":Z" + LAST);
+    keys.push(q + "R4:R5", q + "R" + FIRST + ":R" + LAST);
   }
   const m = "'" + S.moves + "'!";
   parts.push(m + "P2:X" + MOVES_LAST); keys.push(m + "P2:P" + MOVES_LAST);
+  sh.getRange("A2:I" + FULL_LAST).clearContent();
   sh.getRange("A2").setFormula('=IFERROR(SORT(FILTER(VSTACK(' + parts.join(";") + ');VSTACK(' + keys.join(";") + ')<>"");1;TRUE);"")');
   const f = [];
   for (let r = 2; r <= FULL_LAST; r++) {
@@ -313,20 +347,120 @@ function buildFull(ss) {
             on + 'N(L' + (r - 1) + ')+N(H' + r + ')-N(I' + r + '))']);
   }
   sh.getRange(2, 10, f.length, 3).setFormulas(f);
-  auto(sh.getRange(2, 1, FULL_LAST - 1, FULL_HEAD.length));
-  sh.getRange(2, 1, FULL_LAST - 1, 1).setNumberFormat("d.m. h:mm");
-  money(sh.getRange(2, 4, FULL_LAST - 1, 1)); money(sh.getRange(2, 6, FULL_LAST - 1, 7));
   sh.getRange("N1:N7").setValues([
     ["Tento list se vyplňuje sám - nic sem nepište."],
     ["A2: SORT(FILTER(VSTACK(...))) spojí řádky z Půjčky a Den 1-" + DAYS + " a seřadí je podle času."],
-    ["P = paragon (hotovost). Jen pro přehled - peníze se do kasy započtou v uzávěrce PPD na konci dne."],
-    ["VBU = pohyb na účtu (QR platba, převod). PPD = příjem do kasy (půjčka, uzávěrka dne). VPD = výdej z kasy. ID = bez peněz."],
+    ["P = paragon (každý prodej, hotově i QR). Jen pro přehled - peníze se započtou v uzávěrce dne."],
+    ["Uzávěrka dne: PPD = hotovost z paragonů do kasy, VBU = QR platby z paragonů na účet. VPD = výdej z kasy. ID = bez peněz."],
     ["Celkem = Celkem o řádek výš + Pokladna příjmy - Pokladna výdaje + Účet příjmy - Účet výdaje"],
     ["V kase = předchozí + Pokladna příjmy - Pokladna výdaje"],
     ["Na účtu = předchozí + Účet příjmy - Účet výdaje"]]);
   sh.getRange("N1").setFontWeight("bold");
-  sh.setColumnWidth(1, 110); sh.setColumnWidth(2, 110); sh.setColumnWidth(3, 380); sh.setColumnWidth(14, 600); sh.setFrozenRows(1);
-  sh.protect().setDescription("FULL se počítá sám").setWarningOnly(true);
+}
+
+// Writes every formula again (day sheets, Půjčky, Sklad, FULL) without touching what people typed.
+// Run it from the editor when a formula was overwritten or deleted by accident.
+function repairFormulas(ss) {
+  ss = ss || SpreadsheetApp.openById(VIPER_ID);
+  for (let d = 1; d <= DAYS; d++) dayFormulas(sheet(ss, DAY(d)), d);
+  movesFormulas(sheet(ss, S.moves));
+  buildMovesForFull(ss);
+  stockFormulas(sheet(ss, S.stock));
+  fullFormulas(sheet(ss, S.full));
+  protectFormulas(ss);
+  SpreadsheetApp.flush();
+}
+
+// Grey formula cells warn before someone types over them (they can still click "OK" to do it)
+function protectFormulas(ss) {
+  ss.getProtections(SpreadsheetApp.ProtectionType.RANGE).forEach(p => { if (p.getDescription() === "Vzorec") p.remove(); });
+  const add = r => r.protect().setDescription("Vzorec").setWarningOnly(true);
+  for (let d = 1; d <= DAYS; d++) {
+    const sh = sheet(ss, DAY(d));
+    ["C2:C5", "F1:F2", "E" + FIRST + ":F" + LAST, "I" + FIRST + ":J" + LAST, "R4:Z" + LAST].forEach(a => add(sh.getRange(a)));
+  }
+  const mv = sheet(ss, S.moves);
+  ["I2:K" + MOVES_LAST, "M2:N30", "P2:X" + MOVES_LAST].forEach(a => add(mv.getRange(a)));
+  const st = sheet(ss, S.stock);
+  add(st.getRange(2, 1, PRODUCTS_LAST - 1, 1)); add(st.getRange(2, 3, PRODUCTS_LAST - 1, 2 + DAYS));
+}
+
+// ONE TIME (17.11.2026): every sale becomes a paragon P (cash and QR alike, one series in time order),
+// every finished day gets PPD (its cash) + VBU (its QR), numbers in Půjčky get their proper series.
+// Nothing typed is deleted. Run once from the editor; the log lists every number that changed.
+function migrateToP() {
+  const ss = SpreadsheetApp.openById(VIPER_ID);
+  if (String(sheet(ss, DAY(1)).getRange("D2").getValue()).indexOf("VBU") !== -1) throw new Error("Už je převedeno.");
+  const pad = n => String(n).padStart(3, "0");
+  const log = [];
+  // Den 1: the date was typed into B1 ("Datum: 12.11.2026") and C1 got a later date
+  const d1 = sheet(ss, DAY(1)), m1 = String(d1.getRange("B1").getValue()).match(/(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})/);
+  if (m1) { d1.getRange("C1").setValue(new Date(+m1[3], +m1[2] - 1, +m1[1], 12)); log.push("Den 1: datum " + m1[1] + "." + m1[2] + "." + m1[3]); }
+
+  // 1. sales -> P001... in the order they are in Den 1..Den 4 (a new receipt = new number or new time)
+  let n = 0;
+  for (let d = 1; d <= DAYS; d++) {
+    const sh = sheet(ss, DAY(d)), rows = LAST - FIRST + 1;
+    const v = sh.getRange(FIRST, 1, rows, 3).getValues();
+    const A = [], H = [];
+    let prev = null;
+    v.forEach(r => {
+      const old = String(r[0]).trim();
+      if (old === "") { A.push([""]); H.push([""]); prev = null; return; }
+      const key = norm(old) + "|" + String(r[1]);
+      if (key !== prev) {
+        n++;
+        if (norm(old) !== "P" + pad(n)) log.push(DAY(d) + ": " + old + " -> P" + pad(n));
+      }
+      prev = key;
+      A.push(["P" + pad(n)]);
+      H.push([/^VB[UÚ]/.test(norm(old)) ? "QR" : "Hotově"]);
+    });
+    sh.getRange("E2").clearContent();  // was a note, now the day's VBU
+    sh.getRange(FIRST, 8, rows, 1).clearDataValidations();
+    sh.getRange(FIRST, 1, rows, 1).setValues(A);
+    sh.getRange(FIRST, 8, rows, 1).setValues(H);
+    dayLayout(ss, sh, d);
+  }
+
+  // 2. Půjčky: "PPD 001" -> "PPD001"; a number from the wrong series gets the next one of the right series
+  const mv = sheet(ss, S.moves);
+  const mr = mv.getRange(2, 1, MOVES_LAST - 1, 8).getValues();
+  const dirOf = {}; TYPES.forEach(t => { dirOf[t[0]] = t[1]; });
+  const want = r => { const dir = dirOf[String(r[3]).trim()]; return dir === undefined ? null : dir === 0 ? "ID" : r[7] === "Účet" ? "VBU" : dir > 0 ? "PPD" : "VPD"; };
+  const max = {PPD: 0, VPD: 0, VBU: 0, ID: 0};
+  const parsed = mr.map(r => { const m = norm(r[2]).replace("VBÚ", "VBU").match(/^(PPD|VPD|VBU|ID)0*(\d+)$/); return m ? {p: m[1], n: +m[2]} : null; });
+  parsed.forEach((x, i) => { if (x && (x.p === want(mr[i]) || !want(mr[i]))) max[x.p] = Math.max(max[x.p], x.n); });
+  const C = mr.map((r, i) => {
+    const x = parsed[i];
+    if (!x) return [r[2]];
+    const w = want(r) || x.p;
+    const nu = x.p === w ? x.p + pad(x.n) : w + pad(++max[w]);
+    if (String(r[2]) !== nu) log.push("Půjčky řádek " + (i + 2) + ": " + r[2] + " -> " + nu);
+    return [nu];
+  });
+  mv.getRange(2, 3, C.length, 1).setValues(C);
+
+  // 3. formulas everywhere (some were broken) and FULL
+  repairFormulas(ss);
+
+  // 4. finished days (before today) with sales: PPD = their cash, VBU = their QR (only when there was some)
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  for (let d = 1; d <= DAYS; d++) {
+    const sh = sheet(ss, DAY(d)), date = sh.getRange("C1").getValue();
+    const sold = sh.getRange(FIRST, 1, LAST - FIRST + 1, 1).getValues().some(r => String(r[0]).trim() !== "");
+    if (!(date instanceof Date) || date >= today || !sold) continue;
+    const f = sh.getRange("F1:F2").getValues(), cash = toNumber(f[0][0]), qr = toNumber(f[1][0]);
+    const old = [sh.getRange("E1").getValue(), sh.getRange("E2").getValue()];
+    const ppd = "PPD" + pad(++max.PPD), vbu = qr ? "VBU" + pad(++max.VBU) : "";
+    sh.getRange("E1").setValue(ppd).setNote(APP_NOTE);
+    sh.getRange("E2").setValue(vbu).setNote(vbu ? APP_NOTE : "");
+    log.push(DAY(d) + " uzávěrka: " + ppd + " (hotově " + cash + " Kč)" + (vbu ? ", " + vbu + " (QR " + qr + " Kč)" : ", bez QR") +
+             (old[0] ? " [dříve " + old[0] + "]" : ""));
+  }
+  SpreadsheetApp.flush();
+  Logger.log(log.join("\n"));
+  return log;
 }
 
 // ======================================================================= web app
@@ -393,6 +527,7 @@ function usedNumbers(ss) {
     const sh = sheet(ss, DAY(d));
     sh.getRange(FIRST, 1, LAST - FIRST + 1, 1).getValues().forEach(r => take(r[0]));
     take(sh.getRange("E1").getValue());
+    take(sh.getRange("E2").getValue());
   }
   sheet(ss, S.moves).getRange(2, 3, MOVES_LAST - 1, 1).getValues().forEach(r => take(r[0]));
   return out;
@@ -451,7 +586,7 @@ function writeSale(ss, op, skipped) {
     if (i >= a.length) throw new Error(sh.getName() + " is full.");
     const row = FIRST + i;
     sh.getRange(row, 1, 1, 4).setValues([[op.number, op.time, it.name, it.qty]]);
-    sh.getRange(row, 7).setValue(k === 0 && tip ? tip : "");
+    sh.getRange(row, 7, 1, 2).setValues([[k === 0 && tip ? tip : "", op.method === "QR" ? "QR" : "Hotově"]]);
     sh.getRange(row, 11).setValue("");
     sh.getRange(row, 1).setNote(APP_NOTE);
     a[i][0] = op.number;
@@ -461,7 +596,7 @@ function writeSale(ss, op, skipped) {
 
 function clearSaleRow(sh, row) {
   sh.getRange(row, 1, 1, 4).clearContent();
-  sh.getRange(row, 7).clearContent();
+  sh.getRange(row, 7, 1, 2).clearContent();
   sh.getRange(row, 11).clearContent();
   sh.getRange(row, 1).setNote("");
 }
@@ -483,11 +618,18 @@ function writeMove(ss, op, skipped) {
   sh.getRange(row, 3).setNote(APP_NOTE);
 }
 
-// ---- end of day: the day's PPD number goes to E1 of the day sheet (the amount is F1 = SUM of cash)
+// ---- end of day: PPD number to E1 (amount F1 = SUM Hotově), VBU number to E2 (amount F2 = SUM QR, only when there was QR)
 function closeDay(ss, op, skipped) {
-  const cell = daySheet(ss, op.date, true).sh.getRange("E1");
-  if (cell.getValue() !== "" && cell.getNote() !== APP_NOTE && norm(cell.getValue()) !== norm(op.number)) { skipped.push(op.number); return; }
-  cell.setValue(op.number).setNote(APP_NOTE);
+  const sh = daySheet(ss, op.date, true).sh;
+  const free = (cell, number) => cell.getValue() === "" || cell.getNote() === APP_NOTE || norm(cell.getValue()) === norm(number);
+  const ppd = sh.getRange("E1"), vbu = sh.getRange("E2");
+  if (free(ppd, op.number)) ppd.setValue(op.number).setNote(APP_NOTE); else skipped.push(op.number);
+  if (!op.vbu) return;
+  SpreadsheetApp.flush();
+  const qr = toNumber(sh.getRange("F2").getValue());
+  if (!free(vbu, op.vbu)) skipped.push(op.vbu);
+  else if (qr) vbu.setValue(op.vbu).setNote(APP_NOTE);
+  else if (vbu.getNote() === APP_NOTE) vbu.clearContent().setNote("");
 }
 
 function deleteMove(ss, number, skipped) {
