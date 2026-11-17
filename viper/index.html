@@ -126,7 +126,7 @@
   <section id="receipts" class="tab">
     <div class="card row">
       <label style="margin:0">Day</label><input type="date" id="day">
-      <button class="btn" style="margin-left:auto" id="closeDay" title="Writes one PPD with today's cash paragons (P) into the sheet">Close day (PPD)</button>
+      <button class="btn" style="margin-left:auto" id="closeDay" title="Writes one PPD (today's cash) and one VBU (today's QR) into the sheet">Close day (PPD + VBU)</button>
       <button class="btn ghost" data-export>Save Excel file</button>
       <label style="margin:0 0 0 12px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="autoPrint"> Print receipt after each sale</label>
     </div>
@@ -136,6 +136,7 @@
       <div class="stat"><span>QR</span><b id="sQr">0</b></div>
       <div class="stat"><span>Total</span><b id="sTotal">0</b></div>
     </div>
+    <p class="muted" id="statsNote" style="margin:8px 4px 0"></p>
     <div class="card" style="margin-top:16px">
       <table>
         <thead><tr><th>Receipt</th><th>Time</th><th>Items</th><th>Method</th><th class="num">Total</th><th></th></tr></thead>

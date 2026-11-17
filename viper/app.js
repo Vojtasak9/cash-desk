@@ -137,9 +137,9 @@ function qrSvg(text) {
 // ---------------------------------------------------------------- business logic
 
 const receiptNumber = code => parseInt(String(code).replace(/\D/g, ""), 10) || 0;
-// Cash sales are paragons P001, P002...; QR sales are VBU (bank), sharing VBU numbers with other bank movements.
-// PPD is only for money lent to the kasa and for the one "day total" at the end of each day.
-const salePrefix = method => method === "QR" ? "VBU" : "P";
+// Every sale is a paragon P001, P002... (cash and QR alike). At the end of the day one PPD takes the day's
+// cash into the kasa and one VBU the day's QR payments to the account. PPD is also used for loans in cash.
+const salePrefix = () => "P";
 const prefixOf = code => (String(code).replace(/\s+/g, "").toUpperCase().match(/^[A-Z]+/) || [""])[0];
 const formatReceipt = (n, prefix = "P") => prefix + String(n).padStart(3, "0");
 const normalizeReceipt = code => formatReceipt(receiptNumber(code), prefixOf(code) || "P");
@@ -147,7 +147,8 @@ const normalizeReceipt = code => formatReceipt(receiptNumber(code), prefixOf(cod
 const localUsed = prefix => [
   ...state.payments.filter(p => p.status !== "VOID" && prefixOf(p.receipt) === prefix).map(p => receiptNumber(p.receipt)),
   ...state.debts.filter(d => prefixOf(d.number) === prefix).map(d => receiptNumber(d.number)),
-  ...Object.values(state.closedDays || {}).filter(n => prefixOf(n) === prefix).map(receiptNumber)];
+  ...Object.values(state.closedDays || {}).flatMap(c => typeof c === "string" ? [c] : [c.ppd, c.vbu])
+    .filter(n => n && prefixOf(n) === prefix).map(receiptNumber)];
 // Continues after the highest number in the app and in Google Sheets (receipts typed there by hand count too)
 const sheetNumber = kind => (state.sync && state.sync.url && state.sync.numbers && state.sync.numbers[kind]) || 0;
 // After a number was set by hand, continue from it (a cancelled receipt's number may be reused);
@@ -167,11 +168,11 @@ function nextNumber(prefix) {
 }
 const nextReceipt = (method = "Cash") => nextNumber(salePrefix(method));
 
-// "5" or "P5" sets the next paragon, "VBU5" the next bank number
+// "5" or "P5" sets the next paragon
 function setNextReceipt(text) {
-  const m = String(text).replace(/\s+/g, "").toUpperCase().match(/^(P|VBU)?0*(\d{1,6})$/);
-  if (!m || +m[2] === 0) throw new UserError("Number must look like P001 or VBU001 (or just 1 for P).");
-  const prefix = m[1] || "P", n = +m[2];
+  const m = String(text).replace(/\s+/g, "").toUpperCase().match(/^P?0*(\d{1,6})$/);
+  if (!m || +m[1] === 0) throw new UserError("Number must look like P001 (or just 1).");
+  const prefix = "P", n = +m[1];
   const used = state.payments.find(p => p.status !== "VOID" && p.receipt === formatReceipt(n, prefix));
   if (used) throw new UserError(`${used.receipt} is already used (${used.items}). Void it first to use its number again.`);
   state.nextNum = {...(state.nextNum || {}), [prefix]: n};
@@ -295,22 +296,23 @@ function parseDocNumber(text, type, payment) {
     throw new UserError({PPD: "Cash in uses PPD numbers.", VPD: "Cash out uses VPD numbers.",
                          VBU: "Money through the bank account uses VBU numbers.", ID: "When no money moves, the number is ID."}[prefix]);
   }
-  if (prefix === "VBU" && state.payments.some(p => p.status !== "VOID" && p.receipt === formatDoc("VBU", +m[2]))) {
-    throw new UserError(`${formatDoc("VBU", +m[2])} is already used by a QR sale.`);
-  }
   return formatDoc(prefix, +m[2]);
 }
 
-// ---- end of day: one PPD that takes the day's cash paragons (P) into the cash book
+// ---- end of day: PPD = the day's cash paragons into the kasa, VBU = the day's QR paragons to the account.
+// The sheet writes the VBU only when there were QR payments that day.
 async function closeDay(date = today()) {
   state.closedDays ||= {};
-  const number = state.closedDays[date] || nextNumber("PPD");
-  state.closedDays[date] = number;
-  if (state.nextNum && state.nextNum.PPD != null) state.nextNum.PPD = receiptNumber(number) + 1;
-  queue({type: "closeDay", number, date});
+  const old = state.closedDays[date];
+  const c = typeof old === "string" ? {ppd: old} : (old || {});
+  c.ppd ||= nextNumber("PPD");
+  c.vbu ||= nextNumber("VBU");
+  state.closedDays[date] = c;
+  for (const k of ["PPD", "VBU"]) if (state.nextNum && state.nextNum[k] != null) state.nextNum[k] = receiptNumber(c[k.toLowerCase()]) + 1;
+  queue({type: "closeDay", number: c.ppd, vbu: c.vbu, date});
   await save();
   trySync();
-  return number;
+  return c;
 }
 const entryText = e => [e.person, e.note].filter(Boolean).join(" – ") || kindOf(e).cz;
 
@@ -377,8 +379,11 @@ async function trySync() {
     state.outbox = state.outbox.filter(o => !ops.includes(o));  // changes made meanwhile stay queued
     // what we just wrote is now in the sheet; the next refresh replaces this with the sheet's real numbers
     if (state.sync.numbers) ops.forEach(o => {
-      const m = String(o.number || "").match(/^(PPD|VPD|VBU|ID|P)/);
-      if (m && !o.void && o.type !== "deleteEntry") state.sync.numbers[m[1]] = Math.max(state.sync.numbers[m[1]] || 0, receiptNumber(o.number));
+      if (o.void || o.type === "deleteEntry") return;
+      for (const no of [o.number, o.type === "closeDay" ? null : o.vbu]) {
+        const m = String(no || "").match(/^(PPD|VPD|VBU|ID|P)/);
+        if (m) state.sync.numbers[m[1]] = Math.max(state.sync.numbers[m[1]] || 0, receiptNumber(no));
+      }
     });
     if (r.day) { state.sync.day = r.day; renderCash(); }
     if (r.skipped && r.skipped.length) {
@@ -737,7 +742,7 @@ const orderTotal = () => round2(Object.entries(order).reduce((s, [id, q]) => s +
 
 function renderOrder() {
   for (const id of Object.keys(order)) if (!productById(id)) delete order[id];
-  $("#nextReceipt").textContent = nextReceipt("Cash") + " / " + nextReceipt("QR");
+  $("#nextReceipt").textContent = nextReceipt();
   $("#orderLines").innerHTML = Object.entries(order).map(([id, q]) => {
     const p = productById(id);
     return `<tr><td>${esc(p.name)}</td>
@@ -750,20 +755,20 @@ function renderOrder() {
 }
 
 $("#closeDay").onclick = guard(async () => {
-  const cash = (dailyTotals().find(d => d.date === today()) || {cash: 0}).cash;
   const again = state.closedDays && state.closedDays[today()];
-  if (!confirm(again ? `Today already has ${again}. Send it again (it updates the same PPD)?`
-                     : `Close today: one PPD with today's cash paragons (${money(cash)}) goes into the sheet. Continue?`)) return;
-  toast("Day closed: " + await closeDay());
+  if (!confirm(again ? "Today is already closed. Send it again (it updates the same PPD and VBU)?"
+                     : "Close today: one PPD with today's cash and one VBU with today's QR payments go into the sheet (the sheet adds up the amounts). Continue?")) return;
+  const c = await closeDay();
+  toast(`Day closed: ${c.ppd} (cash)` + ` · ${c.vbu} (QR, only if there were QR payments)`);
 });
 $("#clearOrder").onclick = () => { order = {}; renderOrder(); };
 $("#nextReceipt").onclick = guard(async () => {
-  const text = prompt("Next number: P001 for cash, VBU001 for QR (just 1 = P001). The following ones continue from it.", nextReceipt());
+  const text = prompt("Next receipt number (P001, or just 1). The following ones continue from it.", nextReceipt());
   if (text == null || text.trim() === "") return;
   setNextReceipt(text);
   await save(false);
   renderOrder();
-  toast("Next: " + nextReceipt("Cash") + " / " + nextReceipt("QR"));
+  toast("Next: " + nextReceipt());
 });
 
 $("#payQr").onclick = guard(() => {
@@ -820,11 +825,16 @@ function renderPayments() {
   $("#sCash").textContent = money(s.cash);
   $("#sQr").textContent = money(s.qr);
   $("#sTotal").textContent = money(s.total);
+  const sd = state.sync && state.sync.url && state.sync.day;
+  $("#statsNote").textContent = !state.sync.url ? ""
+    : "These are the receipts saved on this device only. " + (sd && day === today()
+      ? `The Viper sheet (${sd.name}, all devices and rows typed by hand) has sales today ${money(sd.sales)}.`
+      : "The Viper sheet is the real total.");
   const list = state.payments.filter(p => p.date === day).reverse();
   $("#payRows").innerHTML = list.map(p => `<tr class="${p.status === "VOID" ? "void" : ""}">
     <td><b>${esc(p.receipt)}</b></td><td>${esc(p.time)}</td><td>${esc(p.items)}</td><td>${esc(p.method)}</td>
     <td class="num">${money(p.total)}</td>
-    <td>${p.status === "VOID" ? "voided" : `<button class="link" data-print="${esc(p.receipt)}">print</button> <button class="link bad" data-void="${esc(p.receipt)}">void</button>`}</td></tr>`
+    <td>${p.status === "VOID" ? "voided" : p.date !== today() ? "" : `<button class="link" data-print="${esc(p.receipt)}">print</button> <button class="link bad" data-void="${esc(p.receipt)}">void</button>`}</td></tr>`
   ).join("") || '<tr><td colspan="6" class="muted">No receipts this day</td></tr>';
   $$("[data-print]").forEach(b => b.onclick = () => printReceipt(b.dataset.print));
   $$("[data-void]").forEach(b => b.onclick = guard(async () => {
@@ -855,15 +865,17 @@ function receiptHtml(p) {
     .logo { height: 22mm; display: block; margin: 0 auto 2mm; }
     .name { width: 44mm; display: block; margin: 0 auto 3mm; }
     .no { font-size: 14pt; font-weight: bold; }
+    .who { font-size: 10pt; margin-bottom: 2mm; }
     table { width: 100%; border-collapse: collapse; margin: 2mm 0; }
     td { padding: .5mm 0; vertical-align: top; }
     td + td { text-align: right; white-space: nowrap; padding-left: 2mm; }
     .tot td { border-top: .4mm solid #000; padding-top: 1.5mm; font-weight: bold; font-size: 13pt; }
   </style></head><body>
     <img class="logo" src="img/logo.png" alt=""><img class="name" src="img/name.png" alt="TEN PÁREK">
+    <div class="c who">Kristian Páca<br>TENPAREK</div>
     <div class="c no">${esc(p.receipt)}</div>
     <div class="c">${date[2]}.${date[1]}.${date[0]}</div>
-    <table>${rows}<tr class="tot"><td>Celkem</td><td>${kc(p.total)}</td></tr></table>
+    <table>${rows}<tr class="tot"><td>Zaplaceno celkem</td><td>${kc(p.total)}</td></tr></table>
   </body></html>`;
 }
 function printReceipt(receipt) {
@@ -961,8 +973,9 @@ function renderCash() {
   $("#sheetMoney").textContent = d
     ? `From the Viper sheet (${d.name}): cash in the kasa ${money(d.cash)}, on the account ${money(d.bank)}, all money ${money(d.total)}, sales today ${money(d.sales)}.`
     : "Connect the Viper sheet to see its numbers here.";
-  $("#cashNow").textContent = money(c.total);
-  $("#cashParts").textContent = `Starting cash ${money(c.start)} + cash sales ${money(c.sales)} + money in ${money(c.in)} − money out ${money(c.out)}`;
+  $("#cashNow").textContent = money(d ? d.cash : c.total);
+  $("#cashParts").textContent = d ? "Counted by the Viper sheet: all sales from every device, rows typed by hand and Půjčky."
+    : `Starting cash ${money(c.start)} + cash sales ${money(c.sales)} + money in ${money(c.in)} − money out ${money(c.out)}`;
 }
 
 function renderBook() {
