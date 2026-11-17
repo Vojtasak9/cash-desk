@@ -23,7 +23,8 @@ Pokladna je jen hezký vstup. Všechno počítá Google Sheet „Viper“ pomoc�
 
 ## FULL
 List FULL se vyplňuje sám (SORT + FILTER + VSTACK) a obsahuje všechny doklady podle času.
-P řádky jsou jen pro přehled, peníze se započtou v uzávěrce PPD (hotovost) a VBU (QR).
+Každý P řádek nese své peníze (Počet × Cena + spropitné): hotově → Pokladna příjmy, QR → Účet příjmy.
+Uzávěrka dne (PPD, VBU) je ve FULL jen jako popisek se součtem, aby se nic nepočítalo dvakrát.
 Celkem = předchozí + pokladna příjmy − výdaje + účet příjmy − výdaje.
 
 ## Opravy

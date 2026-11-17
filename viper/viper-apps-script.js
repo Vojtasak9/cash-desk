@@ -298,22 +298,27 @@ function dayFormulas(sh, d) {
       '=IF(AND(C' + r + '="";G' + r + '="");"";IF(H' + r + '="QR";0;N(F' + r + ')+N(G' + r + ')))',
       '=IF(AND(C' + r + '="";G' + r + '="");"";IF(H' + r + '="QR";N(F' + r + ')+N(G' + r + ');0))',
     ]);
-    // FULL: every P row is only for the overview, the money is in the day's PPD (cash) and VBU (QR)
+    // FULL: every P row carries its money (Hotově -> Pokladna příjmy, QR -> Účet příjmy, tip included)
     const on = 'IF($R' + r + '="";"";';
     h.push(['=IF($C' + r + '="";"";INT($C$1)+IF(ISNUMBER($B' + r + ');MOD($B' + r + ';1);IFERROR(TIMEVALUE($B' + r + ');1/2))+ROW()/10000000)',
             '=' + on + '$A' + r + ')',
-            '=' + on + '$C' + r + '&IF($H' + r + '="QR";" - prodej QR (peníze v uzávěrce VBU)";" - prodej hotově (peníze v uzávěrce PPD)"))',
-            '=' + on + '$E' + r + ')', '=' + on + '$D' + r + ')', '', '', '', '']);
+            '=' + on + '$C' + r + '&IF($H' + r + '="QR";" - prodej (QR)";" - prodej (hotově)")&IF(N($G' + r + ')=0;"";" + spropitné "&$G' + r + '&" Kč"))',
+            '=' + on + '$E' + r + ')', '=' + on + '$D' + r + ')',
+            '=' + on + 'IF($H' + r + '="QR";0;N($I' + r + ')))', '=' + on + '0)',
+            '=' + on + 'IF($H' + r + '="QR";N($J' + r + ');0))', '=' + on + '0)']);
   }
   sh.getRange(FIRST, 5, f.length, 2).setFormulas(f);
   sh.getRange(FIRST, 9, g.length, 2).setFormulas(g);
   sh.getRange(FIRST, 18, h.length, 9).setFormulas(h);
-  // rows 4 and 5: the day's VBU (QR total, to the account) and PPD (cash total, into the kasa)
+  // rows 4 and 5: the day's VBU (QR total) and PPD (cash total) - only a label in FULL, the money was counted on the P rows
+  const zero = c => '=IF(' + c + '="";"";0)';
   sh.getRange("R4:Z5").setFormulas([
     ['=IF(AND(N($F$2)=0;$E$2="");"";INT($C$1)+1-2/100000)', '=IF(R4="";"";IF($E$2="";"VBU (den neuzavřen)";$E$2))',
-     '=IF(R4="";"";"Tržba QR za ' + DAY(d) + ' (součet QR paragonů P)")', '', '', '', '', '=IF(R4="";"";$F$2)', ''],
+     '=IF(R4="";"";"Uzávěrka QR za ' + DAY(d) + ': "&$F$2&" Kč (součet QR paragonů P, už započteno výše)")', '', '',
+     zero("R4"), zero("R4"), zero("R4"), zero("R4")],
     ['=IF(AND(N($F$1)=0;$E$1="");"";INT($C$1)+1-1/100000)', '=IF(R5="";"";IF($E$1="";"PPD (den neuzavřen)";$E$1))',
-     '=IF(R5="";"";"Tržba v hotovosti za ' + DAY(d) + ' (součet hotovostních paragonů P)")', '', '', '=IF(R5="";"";$F$1)', '', '', '']]);
+     '=IF(R5="";"";"Uzávěrka hotovosti za ' + DAY(d) + ': "&$F$1&" Kč (součet hotovostních paragonů P, už započteno výše)")', '', '',
+     zero("R5"), zero("R5"), zero("R5"), zero("R5")]]);
 }
 
 // FULL: everything from Půjčky and the day sheets in time order. Only formulas - nobody types here.
@@ -350,8 +355,8 @@ function fullFormulas(sh) {
   sh.getRange("N1:N7").setValues([
     ["Tento list se vyplňuje sám - nic sem nepište."],
     ["A2: SORT(FILTER(VSTACK(...))) spojí řádky z Půjčky a Den 1-" + DAYS + " a seřadí je podle času."],
-    ["P = paragon (každý prodej, hotově i QR). Jen pro přehled - peníze se započtou v uzávěrce dne."],
-    ["Uzávěrka dne: PPD = hotovost z paragonů do kasy, VBU = QR platby z paragonů na účet. VPD = výdej z kasy. ID = bez peněz."],
+    ["P = paragon (každý prodej). Příjmy = Počet × Cena (+ spropitné): hotově do Pokladna příjmy, QR do Účet příjmy."],
+    ["Uzávěrka dne (PPD hotovost, VBU QR) je tu jen jako popisek se součtem - peníze už jsou započtené u P. VPD = výdej z kasy. ID = bez peněz."],
     ["Celkem = Celkem o řádek výš + Pokladna příjmy - Pokladna výdaje + Účet příjmy - Účet výdaje"],
     ["V kase = předchozí + Pokladna příjmy - Pokladna výdaje"],
     ["Na účtu = předchozí + Účet příjmy - Účet výdaje"]]);
