@@ -1278,5 +1278,36 @@ function migrate() {
   addEventListener("online", () => { refreshProducts(); trySync(); });
   // an app on the Home Screen is often only resumed, not reloaded: refresh when it comes back
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshProducts(); trySync(); } });
-  if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js");
+  watchForUpdates();
 })();
+
+// ---- updates: the app runs from the iPad's cache, so a new version only downloads in the background and an app
+// on the Home Screen has no reload button. Look for a new version every few minutes and switch to it by itself
+// as soon as nobody is in the middle of an order (everything is saved, so a reload loses nothing).
+function watchForUpdates() {
+  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+  let firstInstall = !navigator.serviceWorker.controller;
+  navigator.serviceWorker.register("sw.js").then(reg => {
+    const check = () => reg.update().catch(() => {});
+    setInterval(check, 3 * 60000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
+  }).catch(() => {});
+  let reloading = false;
+  const busy = () => order.length || $$(".modal.open").length || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+  const reloadWhenFree = () => {
+    if (reloading) return;
+    if (busy()) { setTimeout(reloadWhenFree, 5000); return; }
+    reloading = true;
+    location.reload();
+  };
+  // the very first install also "changes" the controller - that page is already the newest, no reload
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (firstInstall) firstInstall = false; else reloadWhenFree(); });
+  navigator.serviceWorker.ready.then(showVersion);
+}
+
+async function showVersion() {
+  try {
+    const v = (await caches.keys()).filter(k => /^viper-v\d+$/.test(k)).sort((a, b) => b.slice(7) - a.slice(7))[0];
+    if (v) $("#appVersion").textContent = "App version: " + v + " (updates by itself)";
+  } catch (e) {}
+}

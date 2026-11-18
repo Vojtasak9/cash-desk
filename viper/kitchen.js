@@ -176,4 +176,9 @@ if (!conf.key) showSetup();
 refresh();
 setInterval(refresh, POLL_MS);
 setInterval(render, 30000);  // the "min" counters
-if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js");
+// a new version downloads in the background: look for one every few minutes and reload into it (then tap Start again)
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  let firstInstall = !navigator.serviceWorker.controller;  // the first install also "changes" the controller: no reload
+  navigator.serviceWorker.register("sw.js").then(reg => setInterval(() => reg.update().catch(() => {}), 3 * 60000)).catch(() => {});
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (firstInstall) firstInstall = false; else location.reload(); });
+}
