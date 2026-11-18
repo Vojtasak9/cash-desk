@@ -48,6 +48,7 @@ const TYPES = [
   ["Vrácení dluhu", -1, -1, "Kasa vrací peníze tomu, komu dluží (např. Kristiánovi jeho 500 Kč)."],
   ["Výdaj z kasy", -1, 0, "Nákup zaplacený přímo z kasy, nikdo nic nedluží."],
   ["Jiný příjem", 1, 0, "Peníze do kasy, které nikomu nedlužíme."],
+  ["Nákup na dluh", 0, 1, "Kupní smlouva: někdo nám něco prodal a ještě jsme nezaplatili. Peníze se nehýbou (číslo ID), kasa mu dluží. Až zaplatíme: Vrácení dluhu."],
 ];
 
 const BLUE = "#dfe7f5", YELLOW = "#fff6db", GREY = "#f1f3f4";

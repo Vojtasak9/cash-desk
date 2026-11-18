@@ -286,6 +286,7 @@ const KINDS = {
   DebtRepaid:  {cz: "Vrácení dluhu",     en: "Kasa pays someone back",                 dir: -1, debt: -1, person: true},
   Expense:     {cz: "Výdaj z kasy",      en: "Expense paid from the kasa",             dir: -1, debt: 0,  person: false},
   OtherIn:     {cz: "Jiný příjem",       en: "Other money in",                         dir: +1, debt: 0,  person: false},
+  OnCredit:    {cz: "Nákup na dluh",     en: "We bought something and pay later (purchase contract)", dir: 0, debt: +1, person: true},
 };
 const kindOf = e => KINDS[e.type] || KINDS.Expense;
 const viaCash = e => e.payment !== "Účet";

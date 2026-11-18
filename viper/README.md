@@ -12,6 +12,7 @@ Pokladna je jen hezký vstup. Všechno počítá Google Sheet „Viper“ pomoc�
 - **Sklad** – Prodáno = SUMIF přes Den 1 až Den 4, Zbývá = Naskladněno − Prodáno.
 - **Půjčky** – vklady, zálohy, výdaje (PPD/VPD/ID). Tabulka „kdo komu dluží“ se počítá přes SUMIF.
 - **Typy pohybů** – tahák: Půjčky si z něj přes VLOOKUP berou, jestli pohyb mění hotovost, účet nebo dluh.
+  **Nákup na dluh** = kupní smlouva, zboží máme, ale ještě jsme nezaplatili: číslo ID, peníze 0, kasa prodávajícímu dluží. Až zaplatíme, nový řádek **Vrácení dluhu** (VPD hotově, VBU z účtu).
 
 ## Čísla dokladů
 - **P001, P002…** – paragon = každý prodej (hotově i QR), jedna řada. Na listu Den sloupec Platba = Hotově / QR.
