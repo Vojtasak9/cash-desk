@@ -5,7 +5,8 @@ App: https://vojtasak9.github.io/cash-desk/viper/
 Pokladna je jen hezký vstup. Všechno počítá Google Sheet „Viper“ pomocí funkcí.
 
 ## Listy
-- **Produkty** – název a cena pro každý den (Cena Den 1 … Cena Den 4). Pokladna i list Den berou cenu svého dne.
+- **Produkty** – název a cena pro každý den (Cena Den 1 … Cena Den 4). Pokladna i list Den berou cenu svého dne. Sloupec **Druh**: prázdné = produkt, `přísada` = dává se na produkt (Kečup, Hořčice zdarma; Cibulka, Jalapeños, Okurky +5 Kč), `skrýt` = pokladna ho nenabízí (starý Addon – Den 1 a Den 2 jeho cenu dál používají).
+- **Kuchyně** – objednávky pro kuchaře: pokladna sem zapíše každý prodej i s přísadami, telefon v kuchyni je odškrtává (Hotovo = čas). Peníze se tu nepočítají.
 - **Den 1 – Den 4** – prodeje. Člověk vyplní jen **Produkt** a **Počet**. Cena (VLOOKUP), Celkem (Počet × Cena) a součty (SUM, SUMIF) se dopočítají samy. Nahoře je hotovost v kase, peníze na účtu a celkem.
 - **FULL** – kompletní přehled pro odevzdání, nic se sem nepíše.
 - **Sklad** – Prodáno = SUMIF přes Den 1 až Den 4, Zbývá = Naskladněno − Prodáno.
@@ -32,6 +33,12 @@ Když někdo přepíše nebo smaže vzorec (šedé buňky), spusť v Apps Script
 
 ## Spropitné
 Když něco stojí 25 Kč a zákazník dá 30, napiš do „Přijato“ 30. Uloží se 30, z toho 5 jako spropitné.
+
+## Přísady a kuchyně
+
+V pokladně: ťukni na produkt (nový řádek objednávky), pak na přísady – přidají se k vybranému (zeleně označenému) řádku. Do listu dne jde každá přísada jako vlastní řádek (např. Cibulka 1 × 5 Kč), takže tržba i FULL sedí. Na účtence je u produktu „+ cibulka, okurky“.
+
+Telefon kuchaře: v pokladně **Settings → Kitchen phone** naskenuj QR kód a dej „Přidat na plochu“. Stránka `kitchen.html` každých 5 s načte dnešní objednávky, pípne u nové, drží displej rozsvícený a ťuknutím na **Done** objednávku odškrtne (v listu Kuchyně se zapíše čas). Stornovaný prodej se v kuchyni ukáže červeně.
 
 ## Připojení
 Adresa skriptu je předvyplněná. Klíč se zadá jednou v Nastavení.

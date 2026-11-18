@@ -179,10 +179,26 @@ function setNextReceipt(text) {
 }
 const productById = id => state.products.find(p => p.id === +id);
 
-async function createPayment(order, method, received) {
+// The order: one line per product with its toppings, e.g. {id: 3, qty: 1, tops: [7, 9]} = 1 hotdog with cibulka and okurky.
+// The sheet gets one row per product and topping (Hotdog 1, Cibulka 1, Okurky 1), the kitchen gets the lines.
+const lineUnit = l => round2((productById(l.id)?.price || 0) + l.tops.reduce((a, t) => a + (productById(t)?.price || 0), 0));
+const lineName = l => productById(l.id)?.name || "?";
+const topNames = l => l.tops.map(t => productById(t)?.name).filter(Boolean);
+// pieces per product (main products and toppings together)
+function orderQtys(lines) {
+  const q = {};
+  for (const l of lines) {
+    q[l.id] = (q[l.id] || 0) + l.qty;
+    for (const t of l.tops) q[t] = (q[t] || 0) + l.qty;
+  }
+  return q;
+}
+
+async function createPayment(orderLines, method, received) {
   const lines = [];
   let total = 0;
-  for (const [id, qty] of Object.entries(order)) {
+  orderLines = orderLines.filter(l => productById(l.id) && l.qty > 0);
+  for (const [id, qty] of Object.entries(orderQtys(orderLines))) {
     const p = productById(id);
     if (!p || qty <= 0) continue;
     if (p.stock != null && p.stock < qty) throw new UserError(`Not enough "${p.name}" in stock (have ${p.stock}).`);
@@ -191,6 +207,8 @@ async function createPayment(order, method, received) {
     lines.push({p, qty, lineTotal});
   }
   if (!lines.length) throw new UserError("The order is empty.");
+  // main products first, then toppings (the order of the rows in the day sheet)
+  lines.sort((a, b) => (a.p.topping ? 1 : 0) - (b.p.topping ? 1 : 0));
   total = round2(total);
   let change = null;
   // The typed amount is what we keep and what is saved (paid 30 for 25 -> 30 saved, 5 is a tip)
@@ -215,9 +233,11 @@ async function createPayment(order, method, received) {
   const pre = salePrefix(method);
   if (state.nextNum && state.nextNum[pre] != null) state.nextNum[pre] = receiptNumber(receipt) + 1;
   for (const {p, qty} of lines) if (p.stock != null) p.stock -= qty;
+  const orderOut = orderLines.map(l => ({name: lineName(l), qty: l.qty, tops: topNames(l), lineTotal: round2(lineUnit(l) * l.qty)}));
   state.payments.push({
     receipt, date: today(), time: nowTime(),
-    items: lines.map(l => `${l.qty}x ${l.p.name}`).join(", "),
+    items: orderOut.map(l => `${l.qty}x ${l.name}` + (l.tops.length ? ` (${l.tops.join(", ")})` : "")).join(", "),
+    lines: orderOut,
     total, goods, tip, method, received, change, status: "OK",
   });
   for (const {p, qty, lineTotal} of lines) {
@@ -352,6 +372,7 @@ function queue(op) {
 // A sale goes to the day sheet with one quantity per product (the sheet subtracts them from Sklad)
 const saleOp = p => ({type: "sale", receipt: p.receipt, number: p.receipt, date: p.date, time: p.time, total: p.total, tip: p.tip || 0,
                       items: state.paymentItems.filter(i => i.receipt === p.receipt).map(i => ({name: i.name, qty: i.qty})),
+                      kitchen: p.lines ? p.lines.map(l => ({name: l.name, qty: l.qty, tops: l.tops})) : undefined,
                       method: p.method, void: p.status === "VOID"});
 const entryOp = e => ({type: "entry", number: e.number, date: e.date, kind: kindOf(e).cz, person: e.person || "",
                        description: e.note || "", amount: e.amount, payment: viaCash(e) ? "Hotově" : "Účet"});
@@ -416,7 +437,9 @@ async function loadProductsFromSheet(sync = state.sync) {
   state.products = products.map(sp => {
     const old = state.products.find(p => p.name.toLowerCase() === sp.name.toLowerCase());
     const stock = sp.stock == null ? null : Math.round(sp.stock);
-    return old ? {...old, name: sp.name, price: sp.price, stock, active: true} : {id: nextId++, name: sp.name, price: sp.price, stock, active: true};
+    const topping = !!sp.topping;
+    return old ? {...old, name: sp.name, price: sp.price, stock, topping, active: true}
+               : {id: nextId++, name: sp.name, price: sp.price, stock, topping, active: true};
   });
   await save(false);
   return products.length;
@@ -699,14 +722,15 @@ async function importExcel(file) {
   migrate();
   state.lastExport = new Date().toISOString();
   await save(false);
-  order = {};
+  order = []; selLine = -1;
   renderAll();
   toast("Data loaded from Excel");
 }
 
 // ---------------------------------------------------------------- UI
 
-let order = {};
+let order = [];     // lines {id, qty, tops: [topping ids]}
+let selLine = -1;   // the line toppings go on
 
 $$("nav button").forEach(b => b.onclick = () => {
   $$("nav button, .tab").forEach(x => x.classList.remove("active"));
@@ -719,36 +743,74 @@ $$("nav button").forEach(b => b.onclick = () => {
 $$("[data-close]").forEach(b => b.onclick = () => b.closest(".modal").classList.remove("open"));
 const closeModals = () => $$(".modal").forEach(m => m.classList.remove("open"));
 
-// ---- register
+// ---- register: tap a product = a new line; tap toppings = on/off for the selected line (the newest one)
 function renderGrid() {
-  $("#prodGrid").innerHTML = state.products.filter(p => p.active).map(p => {
-    const left = p.stock == null ? null : p.stock - (order[p.id] || 0);
-    return `<button class="prod ${left !== null && left <= 0 ? "out" : ""}" data-id="${p.id}">
-      <b>${esc(p.name)}</b>${money(p.price)}<br><small>${left === null ? "" : "stock: " + left}</small></button>`;
-  }).join("") || '<p class="muted">No products yet - add some in "Products & stock".</p>';
-  $$(".prod").forEach(b => b.onclick = () => changeQty(+b.dataset.id, 1));
+  const used = orderQtys(order);
+  const btn = p => {
+    const left = p.stock == null ? null : p.stock - (used[p.id] || 0);
+    const on = p.topping && order[selLine] && order[selLine].tops.includes(p.id);
+    const price = p.topping ? (p.price ? "+" + money(p.price) : "free") : money(p.price);
+    return `<button class="prod ${p.topping ? "top" : ""} ${on ? "on" : ""} ${left !== null && left <= 0 && !on ? "out" : ""}" data-id="${p.id}">
+      <b>${esc(p.name)}</b>${price}<br><small>${left === null ? "" : "stock: " + left}</small></button>`;
+  };
+  const items = state.products.filter(p => p.active);
+  $("#prodGrid").innerHTML = items.filter(p => !p.topping).map(btn).join("") || '<p class="muted">No products - add them to the Produkty sheet in Viper.</p>';
+  const tops = items.filter(p => p.topping);
+  $("#topCard").style.display = tops.length ? "" : "none";
+  $("#topGrid").innerHTML = tops.map(btn).join("");
+  $("#topHint").textContent = order[selLine] ? `for line ${selLine + 1}: ${lineName(order[selLine])}` : "tap a product first";
+  $$("#prodGrid .prod").forEach(b => b.onclick = () => addLine(+b.dataset.id));
+  $$("#topGrid .prod").forEach(b => b.onclick = () => toggleTop(+b.dataset.id));
 }
 
-function changeQty(id, d) {
-  const p = productById(id);
-  const q = (order[id] || 0) + d;
-  if (p.stock != null && q > p.stock) return toast(`Only ${p.stock} × ${p.name} in stock`, true);
-  if (q <= 0) delete order[id]; else order[id] = q;
+function stockOk(lines) {
+  const q = orderQtys(lines);
+  for (const [id, n] of Object.entries(q)) {
+    const p = productById(id);
+    if (p && p.stock != null && n > p.stock) { toast(`Only ${p.stock} × ${p.name} in stock`, true); return false; }
+  }
+  return true;
+}
+
+function addLine(id) {
+  const next = [...order, {id, qty: 1, tops: []}];
+  if (!stockOk(next)) return;
+  order = next;
+  selLine = order.length - 1;
   renderOrder();
 }
 
-const orderTotal = () => round2(Object.entries(order).reduce((s, [id, q]) => s + (productById(id)?.price || 0) * q, 0));
+function toggleTop(id) {
+  const l = order[selLine];
+  if (!l) return toast("Tap a product first, then its toppings", true);
+  const tops = l.tops.includes(id) ? l.tops.filter(t => t !== id) : [...l.tops, id];
+  const next = order.map((x, i) => i === selLine ? {...x, tops} : x);
+  if (!stockOk(next)) return;
+  order = next;
+  renderOrder();
+}
+
+function changeQty(i, d) {
+  const next = order.map((x, k) => k === i ? {...x, qty: x.qty + d} : x).filter(x => x.qty > 0);
+  if (d > 0 && !stockOk(next)) return;
+  if (next.length < order.length) selLine = next.length - 1;  // a line was removed: select the newest one
+  order = next;
+  renderOrder();
+}
+
+const orderTotal = () => round2(order.reduce((s, l) => s + lineUnit(l) * l.qty, 0));
 
 function renderOrder() {
-  for (const id of Object.keys(order)) if (!productById(id)) delete order[id];
+  order = order.filter(l => productById(l.id)).map(l => ({...l, tops: l.tops.filter(t => productById(t))}));
+  if (selLine >= order.length) selLine = order.length - 1;
   $("#nextReceipt").textContent = nextReceipt();
-  $("#orderLines").innerHTML = Object.entries(order).map(([id, q]) => {
-    const p = productById(id);
-    return `<tr><td>${esc(p.name)}</td>
-      <td class="qty"><button data-d="-1" data-id="${id}" aria-label="less">−</button> <b>${q}</b> <button data-d="1" data-id="${id}" aria-label="more">+</button></td>
-      <td class="num">${money(p.price * q)}</td></tr>`;
-  }).join("") || '<tr><td class="muted">Tap a product to add it</td></tr>';
-  $$(".qty button").forEach(b => b.onclick = () => changeQty(+b.dataset.id, +b.dataset.d));
+  $("#orderLines").innerHTML = order.map((l, i) => `<tr class="line ${i === selLine ? "sel" : ""}" data-line="${i}">
+      <td>${esc(lineName(l))}${l.tops.length ? `<br><small class="tops">${esc(topNames(l).join(", "))}</small>` : ""}</td>
+      <td class="qty"><button data-d="-1" data-i="${i}" aria-label="less">−</button> <b>${l.qty}</b> <button data-d="1" data-i="${i}" aria-label="more">+</button></td>
+      <td class="num">${money(lineUnit(l) * l.qty)}</td></tr>`).join("")
+    || '<tr><td class="muted">Tap a product to add it</td></tr>';
+  $$("#orderLines .qty button").forEach(b => b.onclick = e => { e.stopPropagation(); changeQty(+b.dataset.i, +b.dataset.d); });
+  $$("#orderLines tr.line").forEach(r => r.onclick = () => { selLine = +r.dataset.line; renderOrder(); });
   $("#orderTotal").textContent = money(orderTotal());
   renderGrid();
 }
@@ -760,7 +822,7 @@ $("#closeDay").onclick = guard(async () => {
   const c = await closeDay();
   toast(`Day closed: ${c.ppd} (cash)` + ` · ${c.vbu} (QR, only if there were QR payments)`);
 });
-$("#clearOrder").onclick = () => { order = {}; renderOrder(); };
+$("#clearOrder").onclick = () => { order = []; selLine = -1; renderOrder(); };
 $("#nextReceipt").onclick = guard(async () => {
   const text = prompt("Next receipt number (P001, or just 1). The following ones continue from it.", nextReceipt());
   if (text == null || text.trim() === "") return;
@@ -806,7 +868,7 @@ const pay = guard(async (method, received) => {
   try {
     const r = await createPayment(order, method, received);
     closeModals();
-    order = {};
+    order = []; selLine = -1;
     renderOrder(); renderCash();
     toast(`${r.receipt} saved · ${money(r.total)}` + (r.change != null ? ` · change ${money(r.change)}` : ""));
     if (state.settings.autoPrint) printReceipt(r.receipt);
@@ -853,7 +915,9 @@ function receiptHtml(p) {
   const items = state.paymentItems.filter(i => i.receipt === p.receipt);
   const kc = n => String(Math.round(n * 100) / 100).replace(".", ",") + " Kč";
   const date = p.date.split("-").map(Number);
-  const rows = items.map(i => `<tr><td>${i.qty}x ${esc(i.name.toLowerCase())}</td><td>${kc(i.lineTotal)}</td></tr>`).join("")
+  const rows = (p.lines
+    ? p.lines.map(l => `<tr><td>${l.qty}x ${esc(l.name.toLowerCase())}${l.tops.length ? `<div class="tops">+ ${esc(l.tops.join(", ").toLowerCase())}</div>` : ""}</td><td>${kc(l.lineTotal)}</td></tr>`).join("")
+    : items.map(i => `<tr><td>${i.qty}x ${esc(i.name.toLowerCase())}</td><td>${kc(i.lineTotal)}</td></tr>`).join(""))
     + (p.tip ? `<tr><td>spropitné</td><td>${kc(p.tip)}</td></tr>` : "");
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(receiptName(p))}</title><style>
     @page { size: 58mm auto; margin: 0; }
@@ -868,6 +932,7 @@ function receiptHtml(p) {
     table { width: 100%; border-collapse: collapse; margin: 2mm 0; }
     td { padding: .5mm 0; vertical-align: top; }
     td + td { text-align: right; white-space: nowrap; padding-left: 2mm; }
+    .tops { font-size: 9pt; }
     .tot td { border-top: .4mm solid #000; padding-top: 1.5mm; font-weight: bold; font-size: 13pt; }
   </style></head><body>
     <img class="logo" src="img/logo.png" alt=""><img class="name" src="img/name.png" alt="TEN PÁREK">
@@ -1093,11 +1158,26 @@ function renderSettings() {
   $("#sIban").value = s.iban; $("#sCur").value = s.currency; $("#sStart").value = s.start_cash || 0;
   $("#gsUrl").value = state.sync.url; $("#gsKey").value = state.sync.key;
   renderSync();
+  renderKitchenLink();
   $("#lastExport").textContent = state.lastExport
     ? "Last Excel file saved: " + new Date(state.lastExport).toLocaleString()
     : "No Excel file saved yet.";
   renderBackupBanner();
 }
+// The kitchen page with the web app address and key in the # part (it never goes to a server)
+function renderKitchenLink() {
+  const {url, key} = state.sync;
+  if (!url || !key) {
+    $("#kitchenQr").innerHTML = "";
+    $("#kitchenLink").textContent = "Connect Google Sheets first (URL and key).";
+    return;
+  }
+  const link = new URL("kitchen.html", location.href).href.split("#")[0] +
+    "#u=" + encodeURIComponent(url) + "&k=" + encodeURIComponent(key);
+  $("#kitchenQr").innerHTML = qrSvg(link);
+  $("#kitchenLink").innerHTML = `<a href="${esc(link)}" target="_blank" rel="noopener">Open the kitchen screen</a>`;
+}
+
 $("#sSave").onclick = guard(async () => {
   const iban = $("#sIban").value.trim();
   state.settings = {
@@ -1145,10 +1225,10 @@ let lastProductLoad = 0;
 async function refreshProducts() {
   if (!state.sync.url || !navigator.onLine || Date.now() - lastProductLoad < 20000) return;
   lastProductLoad = Date.now();
-  const before = JSON.stringify(state.products.map(p => [p.name, p.price]));
+  const before = JSON.stringify(state.products.map(p => [p.name, p.price, p.topping]));
   try {
     await loadProductsFromSheet();
-    if (JSON.stringify(state.products.map(p => [p.name, p.price])) !== before) renderOrder();
+    if (JSON.stringify(state.products.map(p => [p.name, p.price, p.topping])) !== before) renderOrder();
   } catch (e) {
     state.sync.error = e.message;
     renderSync();

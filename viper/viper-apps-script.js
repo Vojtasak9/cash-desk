@@ -11,6 +11,7 @@
  *   Den 1..Den 4  one row per product sold: Produkt + Počet + Platba -> price, total, cash/QR by formulas;
  *                 every sale is a paragon P001.. (cash and QR); end of day: E1 = PPD (cash total), E2 = VBU (QR total)
  *   FULL          everything in time order (PPD, VPD, P, VBU, ID) - only formulas, nobody types here
+ *   Kuchyně       the orders for the cook's phone (kitchen.html): what to make, with toppings, and when it was done
  *
  * repairFormulas() writes all formulas again without touching typed data.
  *
@@ -23,10 +24,14 @@ const KEY = "ZMEN-ME";
 
 const VIPER_ID = "1ZsqWHUY1iF5czN0nYmrUwboyXHMJ65mTZn6niF1sxLk";
 
-const S = {products: "Produkty", stock: "Sklad", types: "Typy pohybů", moves: "Půjčky", full: "FULL"};
+const S = {products: "Produkty", stock: "Sklad", types: "Typy pohybů", moves: "Půjčky", full: "FULL", kitchen: "Kuchyně"};
 const FULL_LAST = 1800;
 const DAY = d => "Den " + d;
 const DAYS = 4;
+// Produkty column F (after the day prices): "" = product, "přísada" = topping put on a product, "skrýt" = not offered in the app
+const KIND_COL = 2 + DAYS;
+const KIND_HEAD = "Druh (prázdné = produkt, přísada, skrýt)";
+const KINDS_LIST = ["přísada", "skrýt"];
 const FIRST = 7;      // day sheets: summary rows 1-5, header row 6, sales from row 7
 const LAST = 400;
 const MOVES_LAST = 200;
@@ -103,11 +108,52 @@ function buildProducts(ss) {
   const start = [["Standard", 35], ["Mini", 25], ["Hotdog", 70]].map(r => [r[0]].concat(Array(DAYS).fill(r[1])));
   sh.getRange(2, 1, start.length, hdr.length).setValues(start);
   typed(sh.getRange(2, 1, PRODUCTS_LAST - 1, hdr.length)); money(sh.getRange(2, 2, PRODUCTS_LAST - 1, DAYS));
-  const note = hdr.length + 2;
+  kindColumn(sh);
+  const note = hdr.length + 3;
   sh.getRange(1, note, 4, 1).setValues([["Žlutě = píšete vy."], ["Šedě = počítá vzorec."],
     ["Každý den může mít jinou cenu: napište ji do sloupce toho dne."],
     ["Nový produkt napište na první volný řádek. Objeví se sám v Sklad i v nabídce v listech Den 1 až Den " + DAYS + "."]]);
   sh.setColumnWidth(1, 180); sh.setColumnWidth(note, 520); sh.setFrozenRows(1);
+}
+
+// Produkty column F: is it a product, a topping (přísada) or hidden from the app (skrýt)
+function kindColumn(sh) {
+  head(sh.getRange(1, KIND_COL).setValue(KIND_HEAD));
+  typed(sh.getRange(2, KIND_COL, PRODUCTS_LAST - 1, 1)).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList(KINDS_LIST, true).setAllowInvalid(false).build());
+  sh.setColumnWidth(KIND_COL, 170);
+}
+
+// ONE TIME (18.11.2026): toppings instead of "Addon". Addon stays (Den 1 and Den 2 use its price) but is hidden in the app.
+function setupToppings() {
+  const ss = SpreadsheetApp.openById(VIPER_ID);
+  const sh = sheet(ss, S.products);
+  kindColumn(sh);
+  const v = sh.getRange(2, 1, PRODUCTS_LAST - 1, KIND_COL).getValues();
+  const log = [];
+  v.forEach((r, i) => { if (norm(r[0]) === "ADDON" && r[KIND_COL - 1] === "") { sh.getRange(2 + i, KIND_COL).setValue("skrýt"); log.push("Addon: skrýt"); } });
+  const want = [["Kečup", 0], ["Hořčice", 0], ["Cibulka", 5], ["Jalapeños", 5], ["Okurky", 5]];
+  want.forEach(w => {
+    const have = v.findIndex(r => norm(r[0]) === norm(w[0]));
+    if (have !== -1) { sh.getRange(2 + have, KIND_COL).setValue("přísada"); log.push(w[0] + ": už je, přísada"); return; }
+    const i = v.findIndex(r => String(r[0]).trim() === "");
+    if (i === -1) throw new Error("Produkty is full.");
+    const row = [w[0]].concat(Array(DAYS).fill(w[1]), ["přísada"]);
+    sh.getRange(2 + i, 1, 1, KIND_COL).setValues([row]);
+    v[i] = row;
+    log.push(w[0] + " " + w[1] + " Kč: řádek " + (2 + i));
+  });
+  sh.getRange(1, KIND_COL + 1, 6, 1).clearContent();
+  sh.getRange(1, KIND_COL + 2, 6, 1).setValues([["Žlutě = píšete vy."], ["Šedě = počítá vzorec."],
+    ["Každý den může mít jinou cenu: napište ji do sloupce toho dne."],
+    ["Nový produkt napište na první volný řádek. Objeví se sám v Sklad i v nabídce v listech Den 1 až Den " + DAYS + "."],
+    ["Druh: prázdné = produkt (tlačítko v pokladně), přísada = dává se na produkt (kečup, cibulka…), skrýt = pokladna ho nenabízí."],
+    ["Přísada se v listu dne zapíše jako vlastní řádek (např. Cibulka 1 ks × 5 Kč), takže tržba i Sklad sedí."]]);
+  sh.setColumnWidth(KIND_COL + 2, 520);
+  kitchenSheet(ss);
+  SpreadsheetApp.flush();
+  Logger.log(log.join("\n"));
+  return log;
 }
 
 function buildStock(ss) {
@@ -500,6 +546,13 @@ function doPost(e) {
         lock.releaseLock();
       }
       out = {ok: true, done: req.ops.length, skipped: skipped, day: dayInfo(ss, req.date)};
+    } else if (req.action === "orders") {
+      out = {ok: true, orders: readOrders(ss, req.date)};
+    } else if (req.action === "done") {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(30000);
+      try { markDone(ss, req.number, req.done, req.time); SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
+      out = {ok: true, orders: readOrders(ss, req.date)};
     } else {
       throw new Error("Unknown action: " + req.action);
     }
@@ -514,13 +567,15 @@ function doPost(e) {
 function readProducts(ss, iso) {
   let n = 1;
   try { if (iso) n = daySheet(ss, iso, false).n; } catch (e) {}
-  const pr = sheet(ss, S.products).getRange(2, 1, PRODUCTS_LAST - 1, 1 + DAYS).getValues();
+  const pr = sheet(ss, S.products).getRange(2, 1, PRODUCTS_LAST - 1, KIND_COL).getValues();
   const st = sheet(ss, S.stock).getRange(2, 2, PRODUCTS_LAST - 1, 4 + DAYS).getValues();
   const out = [];
   pr.forEach((r, i) => {
-    if (String(r[0]).trim() === "") return;
+    const kind = String(r[KIND_COL - 1]).trim().toLowerCase();
+    if (String(r[0]).trim() === "" || kind === "skrýt") return;
     const left = st[i][st[i].length - 1];
-    out.push({name: String(r[0]).trim(), price: toNumber(r[n]), stock: st[i][0] === "" || left === "" ? null : toNumber(left)});
+    out.push({name: String(r[0]).trim(), price: toNumber(r[n]), stock: st[i][0] === "" || left === "" ? null : toNumber(left),
+              topping: kind === "přísada"});
   });
   return out;
 }
@@ -577,8 +632,10 @@ function writeSale(ss, op, skipped) {
       x.sh.getRange(x.row, 7).setValue("");
       x.sh.getRange(x.row, 11).setValue("STORNO");
     });
+    voidOrder(ss, op.number);
     return;
   }
+  if (op.kitchen && op.kitchen.length) writeOrder(ss, op);
   existing.forEach(x => { clearSaleRow(x.sh, x.row); });
   const sh = existing.length ? existing[0].sh : daySheet(ss, op.date, true).sh;
   const items = op.items.length ? op.items : [{name: "", qty: 0}];
@@ -597,6 +654,72 @@ function writeSale(ss, op, skipped) {
     a[i][0] = op.number;
     i++;
   });
+}
+
+// ---- Kuchyně: one row per order for the cook's phone
+//   Datum | Čas | Číslo | Objednávka (readable) | Hotovo (time) | Stav (STORNO) | data (the same order for the app)
+const KITCHEN_HEAD = ["Datum", "Čas", "Číslo", "Objednávka", "Hotovo (čas)", "Stav", "data pro kuchyni (nepřepisovat)"];
+function kitchenSheet(ss) {
+  let sh = ss.getSheetByName(S.kitchen);
+  if (sh) return sh;
+  sh = ss.insertSheet(S.kitchen);
+  sh.getRange(1, 1, 1, KITCHEN_HEAD.length).setValues([KITCHEN_HEAD]); head(sh.getRange(1, 1, 1, KITCHEN_HEAD.length));
+  sh.getRange("A:A").setNumberFormat("d.m.yyyy"); sh.getRange("B:B").setNumberFormat("@"); sh.getRange("E:E").setNumberFormat("@");
+  sh.getRange("D:D").setWrap(true);
+  sh.setColumnWidth(4, 320); sh.setColumnWidth(7, 200); sh.setFrozenRows(1);
+  sh.getRange("I1:I3").setValues([["Objednávky pro kuchaře - zapisuje je pokladna, odškrtává je telefon v kuchyni (kitchen.html)."],
+    ["Hotovo = čas, kdy kuchař objednávku odškrtl. Smažete-li čas, objednávka se v kuchyni znovu objeví."],
+    ["Peníze se tu nepočítají - ty jsou v listech Den 1 až Den " + DAYS + "."]]);
+  sh.setColumnWidth(9, 520);
+  return sh;
+}
+
+const orderText = lines => lines.map(l => l.qty + "× " + l.name + (l.tops && l.tops.length ? ": " + l.tops.join(", ") : "")).join("\n");
+
+function kitchenRow(sh, number) {
+  const last = sh.getLastRow();
+  if (last < 2) return null;
+  const v = sh.getRange(2, 3, last - 1, 1).getValues();
+  const i = v.findIndex(r => norm(r[0]) === norm(number));
+  return i === -1 ? null : 2 + i;
+}
+
+function writeOrder(ss, op) {
+  const sh = kitchenSheet(ss);
+  const row = kitchenRow(sh, op.number) || sh.getLastRow() + 1;
+  sh.getRange(row, 1, 1, 4).setValues([[toDate(op.date), String(op.time || ""), op.number, orderText(op.kitchen)]]);
+  sh.getRange(row, 6, 1, 2).setValues([["", JSON.stringify(op.kitchen)]]);  // a re-sent order keeps its Hotovo time
+}
+
+function voidOrder(ss, number) {
+  const sh = ss.getSheetByName(S.kitchen);
+  const row = sh && kitchenRow(sh, number);
+  if (row) sh.getRange(row, 6).setValue("STORNO");
+}
+
+function markDone(ss, number, done, time) {
+  const sh = kitchenSheet(ss);
+  const row = kitchenRow(sh, number);
+  if (!row) throw new Error(number + " is not in the Kuchyně sheet.");
+  sh.getRange(row, 5).setValue(done ? String(time || Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "HH:mm:ss")) : "");
+}
+
+// The orders of one day (the app sorts them)
+function readOrders(ss, iso) {
+  const sh = kitchenSheet(ss);
+  const last = sh.getLastRow();
+  if (last < 2 || !iso) return [];
+  const want = toDate(iso).toDateString();
+  const v = sh.getRange(2, 1, last - 1, 7).getValues(), t = sh.getRange(2, 2, last - 1, 1).getDisplayValues();
+  const out = [];
+  v.forEach((r, i) => {
+    if (!(r[0] instanceof Date) || r[0].toDateString() !== want || String(r[2]).trim() === "") return;
+    let lines;
+    try { lines = JSON.parse(r[6]); } catch (e) { lines = null; }
+    if (!Array.isArray(lines)) lines = String(r[3]).split("\n").filter(String).map(s => ({name: s, qty: "", tops: []}));
+    out.push({number: String(r[2]).trim(), time: t[i][0], lines: lines, done: String(r[4]).trim(), void: norm(r[5]) === "STORNO"});
+  });
+  return out;
 }
 
 function clearSaleRow(sh, row) {

@@ -40,6 +40,13 @@
   .prod b { display:block; margin-bottom:4px; }
   .prod small { color:var(--muted); }
   .prod.out { opacity:.4; cursor:not-allowed; }
+  .prod.top { min-height:72px; padding:12px; background:#fbfcfe; }
+  .prod.on { background:#e3f3ea; border-color:var(--ok); box-shadow:inset 0 0 0 2px var(--ok); }
+  #orderLines tr.line { cursor:pointer; }
+  #orderLines tr.sel td { background:#eef6f1; }
+  #orderLines tr.sel td:first-child { box-shadow:inset 4px 0 0 var(--ok); }
+  #orderLines small.tops { color:var(--ok); font-size:14px; }
+  .kitchen-qr svg { width:200px; height:auto; }
   table { width:100%; border-collapse:collapse; font-size:15px; }
   #orderLines td { font-size:17px; }
   th, td { text-align:left; padding:8px 6px; vertical-align:middle; border-bottom:1px solid var(--line); }
@@ -109,7 +116,10 @@
   <!-- REGISTER -->
   <section id="register" class="tab active">
     <div class="register">
-      <div class="card"><h2>Products</h2><div class="grid" id="prodGrid"></div></div>
+      <div>
+        <div class="card"><h2>Products</h2><div class="grid" id="prodGrid"></div></div>
+        <div class="card" id="topCard"><h2>Toppings <span class="muted" id="topHint"></span></h2><div class="grid" id="topGrid"></div></div>
+      </div>
       <div class="card">
         <h2>Order <button class="receipt-no link" id="nextReceipt" title="Change the receipt number"></button></h2>
         <table><tbody id="orderLines"></tbody></table>
@@ -223,6 +233,13 @@
         <button class="btn ghost" id="gsProducts">Reload products</button>
       </div>
       <p class="muted">How to set it up: <a href="https://github.com/Vojtasak9/cash-desk/tree/main/viper#readme" target="_blank" rel="noopener">step-by-step guide</a>.</p>
+    </div>
+    <div class="card" style="max-width:560px">
+      <h2>Kitchen phone</h2>
+      <p class="muted" style="font-size:15px">The cook sees every order (with toppings) on a phone and ticks it off when it's ready.
+        Scan this code with the cook's phone, then "Add to Home Screen". The code contains the key, so only show it to the team.</p>
+      <div class="kitchen-qr" id="kitchenQr"></div>
+      <p class="muted" id="kitchenLink" style="word-break:break-all"></p>
     </div>
     <div class="card" style="max-width:560px">
       <h2>Settings</h2>
