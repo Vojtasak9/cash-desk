@@ -18,6 +18,8 @@ Pokladna je jen hezký vstup. Všechno počítá Google Sheet „Viper“ pomoc�
 - **P001, P002…** – paragon = každý prodej (hotově i QR), jedna řada. Na listu Den sloupec Platba = Hotově / QR.
 - **Uzávěrka dne** (tlačítko „Close day (PPD + VBU)“): **PPD** = hotovost ze všech P toho dne do kasy (E1, částka F1),
   **VBU** = QR platby ze všech P toho dne na účet (E2, částka F2; jen když nějaké QR byly)
+  Čísla uzávěrky (E1, E2) se **počítají sama** vzorcem: nejvyšší PPD/VBU v Půjčkách s datem do toho dne a v uzávěrkách
+  předchozích dnů + 1. Když do Půjček dopíšete např. VBU pro Den 1, uzávěrky se samy posunou. E1/E2 ani FULL nepřepisujte.
 - **PPD** – i půjčka do kasy v hotovosti
 - **VPD** – výdej z kasy
 - **VBU** – i jiný pohyb na účtu (Půjčky, Platba = Účet)

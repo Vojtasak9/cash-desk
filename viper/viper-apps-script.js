@@ -335,6 +335,7 @@ function dayFormulas(sh, d) {
   sh.getRange("C3").setFormula("=" + (prev ? prev + "C3+" : "") + bank);
   sh.getRange("C4").setFormula("=C2+C3");
   sh.getRange("C5").setFormula("=SUM(I" + FIRST + ":J" + LAST + ")");
+  closeNumbers(sh, d);
   const f = [], g = [], h = [];
   for (let r = FIRST; r <= LAST; r++) {
     f.push([
@@ -366,6 +367,22 @@ function dayFormulas(sh, d) {
     ['=IF(AND(N($F$1)=0;$E$1="");"";INT($C$1)+1-1/100000)', '=IF(R5="";"";IF($E$1="";"PPD (den neuzavřen)";$E$1))',
      '=IF(R5="";"";"Uzávěrka hotovosti za ' + DAY(d) + ': "&$F$1&" Kč (součet hotovostních paragonů P, už započteno výše)")', '', '',
      zero("R5"), zero("R5"), zero("R5"), zero("R5")]]);
+}
+
+// The day's closing numbers count themselves, in time order: E1 = PPD, E2 = VBU.
+// Number = the highest PPD/VBU in Půjčky dated up to this day or in an earlier day's close, + 1.
+// (The close is at the end of the day, so a VBU typed into Půjčky for that day comes before it.)
+// Shown only when the day has cash (F1) / QR (F2) payments.
+function closeNumbers(sh, d) {
+  const P = "'" + S.moves + "'!$P$2:$P$" + MOVES_LAST, Q = "'" + S.moves + "'!$Q$2:$Q$" + MOVES_LAST;
+  const f = (pfx, cell, sum) => {
+    let prev = "";
+    for (let k = 1; k < d; k++) prev += ";IFERROR(VALUE(MID('" + DAY(k) + "'!" + cell + ";4;9));0)";
+    return '=IF(N(' + sum + ')=0;"";"' + pfx + '"&TEXT(MAX(0' + prev + ';IFERROR(ARRAYFORMULA(MAX(IF(LEFT(' + Q + ';3)="' + pfx + '";' +
+      'IF(ISNUMBER(' + P + ');IF(' + P + '<INT($C$1)+1;IFERROR(VALUE(MID(' + Q + ';4;9));0);0);0);0)));0))+1;"000"))';
+  };
+  sh.getRange("E1:E2").setFormulas([[f("PPD", "$E$1", "$F$1")], [f("VBU", "$E$2", "$F$2")]])
+    .setNote("Číslo se počítá samo (další PPD/VBU po Půjčkách do tohoto dne a po předchozích dnech). Nepřepisujte.");
 }
 
 // FULL: everything from Půjčky and the day sheets in time order. Only formulas - nobody types here.
@@ -429,7 +446,7 @@ function protectFormulas(ss) {
   const add = r => r.protect().setDescription("Vzorec").setWarningOnly(true);
   for (let d = 1; d <= DAYS; d++) {
     const sh = sheet(ss, DAY(d));
-    ["C2:C5", "F1:F2", "E" + FIRST + ":F" + LAST, "I" + FIRST + ":J" + LAST, "R4:Z" + LAST].forEach(a => add(sh.getRange(a)));
+    ["C2:C5", "E1:F2", "E" + FIRST + ":F" + LAST, "I" + FIRST + ":J" + LAST, "R4:Z" + LAST].forEach(a => add(sh.getRange(a)));
   }
   const mv = sheet(ss, S.moves);
   ["I2:K" + MOVES_LAST, "M2:N30", "P2:X" + MOVES_LAST].forEach(a => add(mv.getRange(a)));
@@ -529,7 +546,7 @@ function doPost(e) {
     if (req.key !== KEY) throw new Error("Wrong key - type the same key into the app as in the script.");
     const ss = SpreadsheetApp.openById(VIPER_ID);
     if (req.action === "products") {
-      out = {ok: true, products: readProducts(ss, req.date), numbers: usedNumbers(ss), day: dayInfo(ss, req.date)};
+      out = {ok: true, products: readProducts(ss, req.date), numbers: usedNumbers(ss, req.date), day: dayInfo(ss, req.date)};
     } else if (req.action === "sync") {
       const lock = LockService.getScriptLock();
       lock.waitLock(30000);
@@ -581,14 +598,18 @@ function readProducts(ss, iso) {
   return out;
 }
 
-function usedNumbers(ss) {
+// The highest number used per series. A day close that counts itself (formula) and isn't over yet (today or later)
+// doesn't count: a PPD/VBU written today takes the next number and that day's close moves after it.
+function usedNumbers(ss, iso) {
   const out = {P: 0, VBU: 0, PPD: 0, VPD: 0, ID: 0};
   const take = v => { const m = norm(v).match(/^(PPD|VPD|VBU|ID|P)(\d+)$/); if (m) out[m[1]] = Math.max(out[m[1]], +m[2]); };
+  const t = iso ? toDate(iso) : null, todayStart = t ? new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime() : Infinity;
   for (let d = 1; d <= DAYS; d++) {
     const sh = sheet(ss, DAY(d));
     sh.getRange(FIRST, 1, LAST - FIRST + 1, 1).getValues().forEach(r => take(r[0]));
-    take(sh.getRange("E1").getValue());
-    take(sh.getRange("E2").getValue());
+    const day = sh.getRange("C1").getValue();
+    const open = !(day instanceof Date) || new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime() >= todayStart;
+    ["E1", "E2"].forEach(a => { const c = sh.getRange(a); if (!(open && c.getFormula())) take(c.getValue()); });
   }
   sheet(ss, S.moves).getRange(2, 3, MOVES_LAST - 1, 1).getValues().forEach(r => take(r[0]));
   return out;
@@ -752,6 +773,7 @@ function closeDay(ss, op, skipped) {
   const sh = daySheet(ss, op.date, true).sh;
   const free = (cell, number) => cell.getValue() === "" || cell.getNote() === APP_NOTE || norm(cell.getValue()) === norm(number);
   const ppd = sh.getRange("E1"), vbu = sh.getRange("E2");
+  if (ppd.getFormula()) return;  // the sheet numbers the close itself (closeNumbers)
   if (free(ppd, op.number)) ppd.setValue(op.number).setNote(APP_NOTE); else skipped.push(op.number);
   if (!op.vbu) return;
   SpreadsheetApp.flush();
