@@ -236,23 +236,22 @@ function buildMoves(ss) {
   sh.setColumnWidth(4, 160); sh.setColumnWidth(6, 220); sh.setColumnWidth(13, 140); sh.setColumnWidth(14, 220); sh.setFrozenRows(1);
 }
 
-// Půjčky formulas: cash / account / debt per row (VLOOKUP into Typy pohybů) and the who-owes-whom table
+// Půjčky formulas: cash / account / debt (VLOOKUP into Typy pohybů) and the who-owes-whom table.
+// One ARRAYFORMULA per column in row 2 (not one formula per row): inserting, moving or deleting rows
+// by hand can't leave a row without its formula or pointing at the wrong row.
+const colRange = (c, last) => "$" + c + "$2:$" + c + "$" + (last || MOVES_LAST);
 function movesFormulas(sh) {
   const T = "'" + S.types + "'!$A$3:$C$" + (TYPES.length + 2);
-  const f = [];
-  for (let r = 2; r <= MOVES_LAST; r++) {
-    f.push([
-      '=IF($D' + r + '="";"";IF($H' + r + '="Účet";0;$G' + r + '*VLOOKUP($D' + r + ';' + T + ';2;FALSE)))',
-      '=IF($D' + r + '="";"";IF($H' + r + '="Účet";$G' + r + '*VLOOKUP($D' + r + ';' + T + ';2;FALSE);0))',
-      '=IF($D' + r + '="";"";$G' + r + '*VLOOKUP($D' + r + ';' + T + ';3;FALSE))',
-    ]);
-  }
-  sh.getRange(2, 9, f.length, 3).setFormulas(f);
-  sh.getRange("M2:M30").clearContent();
+  const [D, G, H] = ["D", "G", "H"].map(c => colRange(c));
+  sh.getRange("I2:K" + MOVES_LAST).clearContent();
+  sh.getRange("I2:K2").setFormulas([[
+    '=ARRAYFORMULA(IF(' + D + '="";"";IF(' + H + '="Účet";0;' + G + '*VLOOKUP(' + D + ';' + T + ';2;FALSE))))',
+    '=ARRAYFORMULA(IF(' + D + '="";"";IF(' + H + '="Účet";' + G + '*VLOOKUP(' + D + ';' + T + ';2;FALSE);0)))',
+    '=ARRAYFORMULA(IF(' + D + '="";"";' + G + '*VLOOKUP(' + D + ';' + T + ';3;FALSE)))',
+  ]]);
+  sh.getRange("M2:N30").clearContent();
   sh.getRange("M2").setFormula('=IFERROR(UNIQUE(FILTER(E2:E' + MOVES_LAST + ';E2:E' + MOVES_LAST + '<>""));"")');
-  const g = [];
-  for (let r = 2; r <= 30; r++) g.push(['=IF(M' + r + '="";"";SUMIF($E$2:$E$' + MOVES_LAST + ';M' + r + ';$K$2:$K$' + MOVES_LAST + '))']);
-  sh.getRange(2, 14, g.length, 1).setFormulas(g);
+  sh.getRange("N2").setFormula('=ARRAYFORMULA(IF(M2:M30="";"";SUMIF(' + colRange("E") + ';M2:M30;' + colRange("K") + ')))');
 }
 
 // Půjčky columns P-X: the same rows prepared for the FULL sheet (built after the day sheets, it reads their dates)
@@ -260,18 +259,19 @@ function movesFormulas(sh) {
 function buildMovesForFull(ss) {
   const sh = sheet(ss, S.moves);
   sh.getRange("P1:X1").setValues([FULL_HEAD.slice(0, 9).map(h => "pro FULL: " + h)]); auto(sh.getRange("P1:X1"));
-  const h = [];
+  const [A, B, C, D, E, F, I, J, P] = ["A", "B", "C", "D", "E", "F", "I", "J", "P"].map(c => colRange(c));
   // no Datum typed -> the date of that day's sheet (column B = day number)
-  const dayDates = []; for (let d = 1; d <= DAYS; d++) dayDates.push("'" + DAY(d) + "'!$C$1");
-  for (let r = 2; r <= MOVES_LAST; r++) {
-    const on = 'IF($P' + r + '="";"";';
-    h.push(['=IF($D' + r + '="";"";IF($A' + r + '<>"";INT($A' + r + ');IFERROR(INT(CHOOSE($B' + r + ';' + dayDates.join(";") + '));0))+ROW()/10000000)', '=' + on + 'IF($C' + r + '="";"(bez čísla)";$C' + r + '))',
-            '=' + on + '$D' + r + '&IF($E' + r + '="";"";" - "&$E' + r + ')&IF($F' + r + '="";"";": "&$F' + r + '))', '', '',
-            '=' + on + 'MAX(N($I' + r + ');0))', '=' + on + 'MAX(-N($I' + r + ');0))',
-            '=' + on + 'MAX(N($J' + r + ');0))', '=' + on + 'MAX(-N($J' + r + ');0))']);
-  }
-  sh.getRange(2, 16, h.length, 9).setFormulas(h);
-  auto(sh.getRange(2, 16, h.length, 9)); sh.getRange(2, 16, h.length, 1).setNumberFormat("d.m. h:mm");
+  let dayDate = "NA()";
+  for (let d = DAYS; d >= 1; d--) dayDate = "IF(" + B + "=" + d + ";'" + DAY(d) + "'!$C$1;" + dayDate + ")";
+  const on = x => '=ARRAYFORMULA(IF(' + P + '="";"";' + x + '))';
+  const plus = x => 'IF(ISNUMBER(' + x + ')*(' + x + '>0);' + x + ';0)', minus = x => 'IF(ISNUMBER(' + x + ')*(' + x + '<0);-' + x + ';0)';
+  sh.getRange("P2:X" + MOVES_LAST).clearContent();
+  sh.getRange("P2:X2").setFormulas([[
+    '=ARRAYFORMULA(IF(' + D + '="";"";IF(' + A + '<>"";INT(' + A + ');IFERROR(INT(' + dayDate + ');0))+ROW(' + D + ')/10000000))',
+    on('IF(' + C + '="";"(bez čísla)";' + C + ')'),
+    on(D + '&IF(' + E + '="";"";" - "&' + E + ')&IF(' + F + '="";"";": "&' + F + ')'), '', '',
+    on(plus(I)), on(minus(I)), on(plus(J)), on(minus(J))]]);
+  auto(sh.getRange(2, 16, MOVES_LAST - 1, 9)); sh.getRange(2, 16, MOVES_LAST - 1, 1).setNumberFormat("d.m. h:mm");
 }
 
 const FULL_HEAD = ["Datum a čas", "Číslo dokladu", "Popis", "Cena za kus", "Počet kusů",
