@@ -233,7 +233,8 @@ async function createPayment(orderLines, method, received) {
   const pre = salePrefix(method);
   if (state.nextNum && state.nextNum[pre] != null) state.nextNum[pre] = receiptNumber(receipt) + 1;
   for (const {p, qty} of lines) if (p.stock != null) p.stock -= qty;
-  const orderOut = orderLines.map(l => ({name: lineName(l), qty: l.qty, tops: topNames(l), lineTotal: round2(lineUnit(l) * l.qty)}));
+  const orderOut = orderLines.map(l => ({name: lineName(l), qty: l.qty, tops: topNames(l), lineTotal: round2(lineUnit(l) * l.qty),
+                                         ...(isTopLine(l) ? {alone: true} : {})}));
   state.payments.push({
     receipt, date: today(), time: nowTime(),
     items: orderOut.map(l => `${l.qty}x ${l.name}` + (l.tops.length ? ` (${l.tops.join(", ")})` : "")).join(", "),
@@ -373,7 +374,7 @@ function queue(op) {
 // A sale goes to the day sheet with one quantity per product (the sheet subtracts them from Sklad)
 const saleOp = p => ({type: "sale", receipt: p.receipt, number: p.receipt, date: p.date, time: p.time, total: p.total, tip: p.tip || 0,
                       items: state.paymentItems.filter(i => i.receipt === p.receipt).map(i => ({name: i.name, qty: i.qty})),
-                      kitchen: p.lines ? p.lines.map(l => ({name: l.name, qty: l.qty, tops: l.tops})) : undefined,
+                      kitchen: p.lines ? p.lines.map(l => ({name: l.name, qty: l.qty, tops: l.tops, ...(l.alone ? {alone: true} : {})})) : undefined,
                       method: p.method, void: p.status === "VOID"});
 const entryOp = e => ({type: "entry", number: e.number, date: e.date, kind: kindOf(e).cz, person: e.person || "",
                        description: e.note || "", amount: e.amount, payment: viaCash(e) ? "Hotově" : "Účet"});
@@ -744,12 +745,16 @@ $$("nav button").forEach(b => b.onclick = () => {
 $$("[data-close]").forEach(b => b.onclick = () => b.closest(".modal").classList.remove("open"));
 const closeModals = () => $$(".modal").forEach(m => m.classList.remove("open"));
 
-// ---- register: tap a product = a new line; tap toppings = on/off for the selected line (the newest one)
+// ---- register: tap a product = a new line; tap toppings = on/off for the selected line (the newest one).
+// No product line selected (tap the selected line again, or "sell alone") = a tapped topping is sold on its own.
+const isTopLine = l => !!(l && productById(l.id)?.topping);
+const productSel = () => order[selLine] && !isTopLine(order[selLine]) ? order[selLine] : null;
 function renderGrid() {
   const used = orderQtys(order);
+  const sel = productSel();
   const btn = p => {
     const left = p.stock == null ? null : p.stock - (used[p.id] || 0);
-    const on = p.topping && order[selLine] && order[selLine].tops.includes(p.id);
+    const on = p.topping && sel && sel.tops.includes(p.id);
     const price = p.topping ? (p.price ? "+" + money(p.price) : "free") : money(p.price);
     return `<button class="prod ${p.topping ? "top" : ""} ${on ? "on" : ""} ${left !== null && left <= 0 && !on ? "out" : ""}" data-id="${p.id}">
       <b>${esc(p.name)}</b>${price}<br><small>${left === null ? "" : "stock: " + left}</small></button>`;
@@ -759,7 +764,10 @@ function renderGrid() {
   const tops = items.filter(p => p.topping);
   $("#topCard").style.display = tops.length ? "" : "none";
   $("#topGrid").innerHTML = tops.map(btn).join("");
-  $("#topHint").textContent = order[selLine] ? `for line ${selLine + 1}: ${lineName(order[selLine])}` : "tap a product first";
+  $("#topHint").innerHTML = sel
+    ? `for line ${selLine + 1}: ${esc(lineName(sel))} <button class="link" id="topAlone">sell alone</button>`
+    : "sold on their own (tap a product line to add them to it)";
+  if (sel) $("#topAlone").onclick = () => { selLine = -1; renderOrder(); };
   $$("#prodGrid .prod").forEach(b => b.onclick = () => addLine(+b.dataset.id));
   $$("#topGrid .prod").forEach(b => b.onclick = () => toggleTop(+b.dataset.id));
 }
@@ -782,8 +790,15 @@ function addLine(id) {
 }
 
 function toggleTop(id) {
-  const l = order[selLine];
-  if (!l) return toast("Tap a product first, then its toppings", true);
+  const l = productSel();
+  if (!l) {  // a topping on its own: +1 on its line, or a new line
+    const i = order.findIndex(x => x.id === id && !x.tops.length);
+    const next = i === -1 ? [...order, {id, qty: 1, tops: []}] : order.map((x, k) => k === i ? {...x, qty: x.qty + 1} : x);
+    if (!stockOk(next)) return;
+    order = next;
+    selLine = i === -1 ? order.length - 1 : i;
+    return renderOrder();
+  }
   const tops = l.tops.includes(id) ? l.tops.filter(t => t !== id) : [...l.tops, id];
   const next = order.map((x, i) => i === selLine ? {...x, tops} : x);
   if (!stockOk(next)) return;
@@ -811,7 +826,7 @@ function renderOrder() {
       <td class="num">${money(lineUnit(l) * l.qty)}</td></tr>`).join("")
     || '<tr><td class="muted">Tap a product to add it</td></tr>';
   $$("#orderLines .qty button").forEach(b => b.onclick = e => { e.stopPropagation(); changeQty(+b.dataset.i, +b.dataset.d); });
-  $$("#orderLines tr.line").forEach(r => r.onclick = () => { selLine = +r.dataset.line; renderOrder(); });
+  $$("#orderLines tr.line").forEach(r => r.onclick = () => { selLine = selLine === +r.dataset.line ? -1 : +r.dataset.line; renderOrder(); });
   $("#orderTotal").textContent = money(orderTotal());
   renderGrid();
 }

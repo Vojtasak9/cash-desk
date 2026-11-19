@@ -57,7 +57,7 @@ function render() {
   setHtml("#orders", open.map(o => {
     const age = Math.max(0, Math.floor((nowSec() - timeSec(o.time)) / 60));
     const lines = o.lines.map(l => `<li><div class="item">${l.qty !== "" ? `<span class="q">${esc(l.qty)}×</span>` : ""}${esc(l.name)}</div>` +
-      (l.tops && l.tops.length ? `<div class="tops">${l.tops.map(t => `<span>${esc(t)}</span>`).join("")}</div>` : `<div class="plain">nothing on it</div>`) + "</li>").join("");
+      (l.tops && l.tops.length ? `<div class="tops">${l.tops.map(t => `<span>${esc(t)}</span>`).join("")}</div>` : (l.alone ? `<div class="plain">only the topping</div>` : `<div class="plain">nothing on it</div>`)) + "</li>").join("");
     return `<div class="order ${o.void ? "void" : ""} ${o.fresh ? "fresh" : ""} ${pending.has(o.number) ? "sending" : ""}">
       ${o.void ? '<div class="voidtag">CANCELLED - don\'t make it</div>' : ""}
       <div class="oh"><b>${esc(o.number)}</b><span>${esc(String(o.time).slice(0, 5))}</span>
