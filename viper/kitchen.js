@@ -1,4 +1,4 @@
-// VIPER kitchen screen: the cook's phone shows today's orders from the sheet "Kuchyně" and ticks them off.
+// SIDEWINDER kitchen screen: the cook's phone shows today's orders from the sheet "Kuchyně" and ticks them off.
 // The cash desk writes every sale there (with its toppings); this page asks the web app every few seconds.
 "use strict";
 

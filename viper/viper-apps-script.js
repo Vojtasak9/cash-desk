@@ -1,5 +1,5 @@
 /**
- * VIPER - the cash desk app's Google Sheet (experimental version)
+ * SIDEWINDER - the cash desk app's Google Sheet (experimental version)
  *
  * The sheet works on its own: you type only WHAT you sold and HOW MANY, formulas do the rest.
  * The app is just a nicer way to type the same rows.
@@ -16,13 +16,13 @@
  * repairFormulas() writes all formulas again without touching typed data.
  *
  * The spreadsheet uses Czech settings, so formulas use ";" between arguments.
- * rebuildViper() deletes all sheets and builds them again (run it from the editor).
+ * rebuildSidewinder() deletes all sheets and builds them again (run it from the editor).
  */
 
 // Pick your own password, put it here AND type the same one into the app.
 const KEY = "ZMEN-ME";
 
-const VIPER_ID = "1ZsqWHUY1iF5czN0nYmrUwboyXHMJ65mTZn6niF1sxLk";
+const SIDEWINDER_ID = "1ZsqWHUY1iF5czN0nYmrUwboyXHMJ65mTZn6niF1sxLk";
 
 const S = {products: "Produkty", stock: "Sklad", types: "Typy pohybů", moves: "Půjčky", full: "FULL", kitchen: "Kuchyně"};
 const FULL_LAST = 1800;
@@ -55,8 +55,8 @@ const BLUE = "#dfe7f5", YELLOW = "#fff6db", GREY = "#f1f3f4";
 
 // ======================================================================= build the sheets
 
-function rebuildViper() {
-  const ss = SpreadsheetApp.openById(VIPER_ID);
+function rebuildSidewinder() {
+  const ss = SpreadsheetApp.openById(SIDEWINDER_ID);
   const oldProducts = ss.getSheetByName(S.products)
     ? ss.getSheetByName(S.products).getRange(2, 1, PRODUCTS_LAST - 1, 1 + DAYS).getValues().filter(r => String(r[0]).trim() !== "")
       .map(r => r.map((v, i) => i > 1 && v === "" ? r[1] : v)) : [];  // old sheet with one price -> same price every day
@@ -83,7 +83,7 @@ function rebuildViper() {
 
 // Adds the missing day sheets (up to DAYS) and redoes Sklad, keeping everything already typed in
 function addMissingDays() {
-  const ss = SpreadsheetApp.openById(VIPER_ID);
+  const ss = SpreadsheetApp.openById(SIDEWINDER_ID);
   for (let d = 1; d <= DAYS; d++) if (!ss.getSheetByName(DAY(d))) buildDay(ss, d);
   const old = ss.getSheetByName(S.stock);
   const stocked = old ? old.getRange(2, 2, PRODUCTS_LAST - 1, 1).getValues() : null;
@@ -127,7 +127,7 @@ function kindColumn(sh) {
 
 // ONE TIME (18.11.2026): toppings instead of "Addon". Addon stays (Den 1 and Den 2 use its price) but is hidden in the app.
 function setupToppings() {
-  const ss = SpreadsheetApp.openById(VIPER_ID);
+  const ss = SpreadsheetApp.openById(SIDEWINDER_ID);
   const sh = sheet(ss, S.products);
   kindColumn(sh);
   const v = sh.getRange(2, 1, PRODUCTS_LAST - 1, KIND_COL).getValues();
@@ -430,7 +430,7 @@ function fullFormulas(sh) {
 // Writes every formula again (day sheets, Půjčky, Sklad, FULL) without touching what people typed.
 // Run it from the editor when a formula was overwritten or deleted by accident.
 function repairFormulas(ss) {
-  ss = ss || SpreadsheetApp.openById(VIPER_ID);
+  ss = ss || SpreadsheetApp.openById(SIDEWINDER_ID);
   for (let d = 1; d <= DAYS; d++) dayFormulas(sheet(ss, DAY(d)), d);
   movesFormulas(sheet(ss, S.moves));
   buildMovesForFull(ss);
@@ -458,7 +458,7 @@ function protectFormulas(ss) {
 // every finished day gets PPD (its cash) + VBU (its QR), numbers in Půjčky get their proper series.
 // Nothing typed is deleted. Run once from the editor; the log lists every number that changed.
 function migrateToP() {
-  const ss = SpreadsheetApp.openById(VIPER_ID);
+  const ss = SpreadsheetApp.openById(SIDEWINDER_ID);
   if (String(sheet(ss, DAY(1)).getRange("D2").getValue()).indexOf("VBU") !== -1) throw new Error("Už je převedeno.");
   const pad = n => String(n).padStart(3, "0");
   const log = [];
@@ -535,7 +535,7 @@ function migrateToP() {
 // ======================================================================= web app
 
 function doGet() {
-  return ContentService.createTextOutput("Viper script is running.");
+  return ContentService.createTextOutput("Sidewinder script is running.");
 }
 
 function doPost(e) {
@@ -544,7 +544,7 @@ function doPost(e) {
     const req = JSON.parse(e.postData.contents);
     if (KEY === "ZMEN-ME") throw new Error('Change KEY at the top of the script first (it still says "ZMEN-ME").');
     if (req.key !== KEY) throw new Error("Wrong key - type the same key into the app as in the script.");
-    const ss = SpreadsheetApp.openById(VIPER_ID);
+    const ss = SpreadsheetApp.openById(SIDEWINDER_ID);
     if (req.action === "products") {
       out = {ok: true, products: readProducts(ss, req.date), numbers: usedNumbers(ss, req.date), day: dayInfo(ss, req.date)};
     } else if (req.action === "sync") {
@@ -796,7 +796,7 @@ function deleteMove(ss, number, skipped) {
 
 function sheet(ss, name) {
   const sh = ss.getSheetByName(name);
-  if (!sh) throw new Error('Sheet "' + name + '" not found in Viper - was it renamed?');
+  if (!sh) throw new Error('Sheet "' + name + '" not found in Sidewinder - was it renamed?');
   return sh;
 }
 

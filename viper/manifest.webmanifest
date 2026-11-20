@@ -1,6 +1,6 @@
 {
-  "name": "Viper",
-  "short_name": "Viper",
+  "name": "Sidewinder",
+  "short_name": "Sidewinder",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

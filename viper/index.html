@@ -6,12 +6,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Viper">
+<meta name="apple-mobile-web-app-title" content="Sidewinder">
 <meta name="theme-color" content="#1f6f43">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <link rel="icon" href="../icon-192.png">
-<title>Viper</title>
+<title>Sidewinder</title>
 <style>
   :root { --bg:#f4f6fa; --card:#fff; --ink:#1d2330; --muted:#6b7385; --line:#e2e6ee;
           --accent:#1f6f43; --ok:#1f8a4c; --bad:#c0392b; }
@@ -96,7 +96,7 @@
 </head>
 <body>
 <header>
-  <h1 id="shopName">Viper</h1>
+  <h1 id="shopName">Sidewinder</h1>
   <span class="pill" id="cashPill" title="Cash in the box">Cash: 0</span>
   <button class="pill" id="syncPill" style="display:none" title="Google Sheets"></button>
   <nav>
@@ -186,7 +186,7 @@
         <button class="btn" id="dSave">Add</button>
         <button class="btn ghost" id="dCancel" style="display:none">Cancel</button>
       </div>
-      <p class="muted">Money in gets a PPD number (shared with sales), money out a VPD number, and when no money moves an ID number. Everything goes to the sheet "Půjčky" in Viper.
+      <p class="muted">Money in gets a PPD number (shared with sales), money out a VPD number, and when no money moves an ID number. Everything goes to the sheet "Půjčky" in Sidewinder.
         You can change the number - e.g. type 1 to start again from PPD 001; the next ones continue from it.</p>
       <p class="muted" id="dHelp"></p>
     </div>
@@ -223,7 +223,7 @@
     <div class="card" style="max-width:560px">
       <h2>Google Sheets</h2>
       <p class="muted" style="font-size:15px">Sends every sale (PPD) to the day sheet <b>Den 1 – Den 4</b> and every money movement to
-        <b>Půjčky</b> in the <b>Viper</b> spreadsheet, and loads products, prices, stock and the day's cash from it.
+        <b>Půjčky</b> in the <b>Sidewinder</b> spreadsheet, and loads products, prices, stock and the day's cash from it.
         The sheet's formulas do the calculating. Changes made offline are sent when the internet is back.</p>
       <label>Web app URL (from Apps Script → Deploy)</label><input id="gsUrl" style="width:100%" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off">
       <label>Key (the same as KEY in the script)</label><input id="gsKey" style="width:100%" autocomplete="off" autocapitalize="off">

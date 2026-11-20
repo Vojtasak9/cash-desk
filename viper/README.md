@@ -1,8 +1,8 @@
-# Viper (experimentální pokladna)
+# Sidewinder (experimentální pokladna)
 
 App: https://vojtasak9.github.io/cash-desk/viper/
 
-Pokladna je jen hezký vstup. Všechno počítá Google Sheet „Viper“ pomocí funkcí.
+Pokladna je jen hezký vstup. Všechno počítá Google Sheet „Sidewinder“ pomocí funkcí.
 
 ## Listy
 - **Produkty** – název a cena pro každý den (Cena Den 1 … Cena Den 4). Pokladna i list Den berou cenu svého dne. Sloupec **Druh**: prázdné = produkt, `přísada` = dává se na produkt (Kečup, Hořčice zdarma; Cibulka, Jalapeños, Okurky +5 Kč), `skrýt` = pokladna ho nenabízí (starý Addon – Den 1 a Den 2 jeho cenu dál používají).
@@ -45,4 +45,4 @@ Telefon kuchaře: v pokladně **Settings → Kitchen phone** naskenuj QR kód a 
 
 ## Připojení
 Adresa skriptu je předvyplněná. Klíč se zadá jednou v Nastavení.
-Nový začátek: v Apps Script editoru spusť `rebuildViper`.
+Nový začátek: v Apps Script editoru spusť `rebuildSidewinder`.

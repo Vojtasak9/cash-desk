@@ -1,4 +1,4 @@
-// VIPER - experimental cash desk: a user-friendly front end for the "Viper" Google Sheet.
+// SIDEWINDER - experimental cash desk: a user-friendly front end for the "Sidewinder" Google Sheet.
 // Cash Desk - runs completely in the browser (no server).
 // Data is kept on the device in IndexedDB; "Save Excel file" exports everything to one .xlsx.
 "use strict";
@@ -18,7 +18,7 @@ const DEFAULT_STATE = () => ({
   paymentItems: [],  // {receipt, productId, name, qty, unitPrice, lineTotal}
   debts: [],         // cash book: {id, number, date, type (see KINDS), person, amount, note}
   settings: {shop_name: "Jarmark", account_name: "", iban: "", currency: "CZK", start_cash: 0},
-  // the Viper web app is filled in; the key is typed once in Settings
+  // the Sidewinder web app is filled in; the key is typed once in Settings
   sync: {url: "https://script.google.com/macros/s/AKfycbwX_PD5J5_k-80yH49B47eSKnVwA_duDMtiA3Hn1tzfqz5Nkiq0Ep5JRUtiU1k0BLSc/exec", key: "", lastSync: null, error: null, numbers: {P: 0, PPD: 0, VPD: 0}},  // Google Sheets web app (not exported to Excel)
   outbox: [],        // changes waiting to be sent to Google Sheets
   lastExport: null,  // ISO time of the last Excel export
@@ -424,10 +424,10 @@ async function trySync() {
   if (!state.sync.error && state.outbox.length) trySync();
 }
 
-// Names, prices and stock (Sklad / Zbývá) come from the Viper sheet; "on sale" stays as set in the app
+// Names, prices and stock (Sklad / Zbývá) come from the Sidewinder sheet; "on sale" stays as set in the app
 async function loadProductsFromSheet(sync = state.sync) {
   const {products, numbers, day} = await callSheets({action: "products"}, sync);
-  if (!products.length) throw new UserError('No products found in the "Produkty" sheet of Viper.');
+  if (!products.length) throw new UserError('No products found in the "Produkty" sheet of Sidewinder.');
   if (numbers) {
     // rows were deleted in the sheet: drop numbers typed by hand so counting restarts after what is left
     const old = state.sync.numbers || {};
@@ -760,7 +760,7 @@ function renderGrid() {
       <b>${esc(p.name)}</b>${price}<br><small>${left === null ? "" : "stock: " + left}</small></button>`;
   };
   const items = state.products.filter(p => p.active);
-  $("#prodGrid").innerHTML = items.filter(p => !p.topping).map(btn).join("") || '<p class="muted">No products - add them to the Produkty sheet in Viper.</p>';
+  $("#prodGrid").innerHTML = items.filter(p => !p.topping).map(btn).join("") || '<p class="muted">No products - add them to the Produkty sheet in Sidewinder.</p>';
   const tops = items.filter(p => p.topping);
   $("#topCard").style.display = tops.length ? "" : "none";
   $("#topGrid").innerHTML = tops.map(btn).join("");
@@ -905,8 +905,8 @@ function renderPayments() {
   const sd = state.sync && state.sync.url && state.sync.day;
   $("#statsNote").textContent = !state.sync.url ? ""
     : "These are the receipts saved on this device only. " + (sd && day === today()
-      ? `The Viper sheet (${sd.name}, all devices and rows typed by hand) has sales today ${money(sd.sales)}.`
-      : "The Viper sheet is the real total.");
+      ? `The Sidewinder sheet (${sd.name}, all devices and rows typed by hand) has sales today ${money(sd.sales)}.`
+      : "The Sidewinder sheet is the real total.");
   const list = state.payments.filter(p => p.date === day).reverse();
   $("#payRows").innerHTML = list.map(p => `<tr class="${p.status === "VOID" ? "void" : ""}">
     <td><b>${esc(p.receipt)}</b></td><td>${esc(p.time)}</td><td>${esc(p.items)}</td><td>${esc(p.method)}</td>
@@ -990,10 +990,10 @@ function renderCash() {
   const c = cashNow(), d = state.sync && state.sync.url && state.sync.day;
   $("#cashPill").textContent = d ? `${d.name}: cash ${money(d.cash)} · all ${money(d.total)}` : "Cash: " + money(c.total);
   $("#sheetMoney").textContent = d
-    ? `From the Viper sheet (${d.name}): cash in the kasa ${money(d.cash)}, on the account ${money(d.bank)}, all money ${money(d.total)}, sales today ${money(d.sales)}.`
-    : "Connect the Viper sheet to see its numbers here.";
+    ? `From the Sidewinder sheet (${d.name}): cash in the kasa ${money(d.cash)}, on the account ${money(d.bank)}, all money ${money(d.total)}, sales today ${money(d.sales)}.`
+    : "Connect the Sidewinder sheet to see its numbers here.";
   $("#cashNow").textContent = money(d ? d.cash : c.total);
-  $("#cashParts").textContent = d ? "Counted by the Viper sheet: all sales from every device, rows typed by hand and Půjčky."
+  $("#cashParts").textContent = d ? "Counted by the Sidewinder sheet: all sales from every device, rows typed by hand and Půjčky."
     : `Starting cash ${money(c.start)} + cash sales ${money(c.sales)} + money in ${money(c.in)} − money out ${money(c.out)}`;
 }
 
@@ -1136,7 +1136,7 @@ $("#gsSave").onclick = guard(async () => {
     $("#gsSave").disabled = true;
     try {
       const n = await loadProductsFromSheet({url, key});
-      toast(`Connected to Viper - ${n} products loaded`);
+      toast(`Connected to Sidewinder - ${n} products loaded`);
     } finally { $("#gsSave").disabled = false; }
   }
   state.sync = {...state.sync, url, key, error: null};
@@ -1236,7 +1236,7 @@ async function showStorageInfo() {
   $("#storageInfo").textContent = text;
 }
 
-// Products (names, prices, stock) always come from the Viper sheet
+// Products (names, prices, stock) always come from the Sidewinder sheet
 let lastProductLoad = 0;
 async function refreshProducts() {
   if (!state.sync.url || !navigator.onLine || Date.now() - lastProductLoad < 20000) return;
@@ -1323,6 +1323,6 @@ function watchForUpdates() {
 async function showVersion() {
   try {
     const v = (await caches.keys()).filter(k => /^viper-v\d+$/.test(k)).sort((a, b) => b.slice(7) - a.slice(7))[0];
-    if (v) $("#appVersion").textContent = "App version: " + v + " (updates by itself)";
+    if (v) $("#appVersion").textContent = "App version: Sidewinder " + v.slice(6) + " (updates by itself)";
   } catch (e) {}
 }
