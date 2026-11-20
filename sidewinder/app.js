@@ -361,7 +361,7 @@ function debtTotals() {
 }
 
 // ---------------------------------------------------------------- Google Sheets sync
-// Every change is queued in state.outbox and sent to the Apps Script web app (google-apps-script.js).
+// Every change is queued in state.outbox and sent to the Apps Script web app (sidewinder-apps-script.js).
 // Works offline: the queue is kept on the device and sent when the internet is back.
 
 const opKey = op => op.type === "sale" ? "sale:" + op.receipt : "entry:" + String(op.number).replace(/\s+/g, "");
@@ -1252,8 +1252,38 @@ async function refreshProducts() {
 }
 
 function renderAll() {
-  renderSettings(); renderOrder(); renderBook(); renderPayments();
+  renderSettings(); renderOrder(); renderBook(); renderPayments(); renderMoveBanner();
 }
+
+// ---- moving from the old address (/viper/): an iPad Home Screen app keeps its own storage, so the new icon
+// starts empty. Old Viper copies everything ("Copy my data") and this pastes it in.
+const MOVE_TAG = "SIDEWINDER-MOVE:";
+function renderMoveBanner() {
+  $("#moveBanner").classList.toggle("show", !state.sync.key && !state.payments.length && !state.debts.length);
+}
+async function importMove(text) {
+  text = String(text || "").trim();
+  if (!text.startsWith(MOVE_TAG)) throw new UserError("That isn't data from the old Viper app - in Viper tap Copy my data first.");
+  let next;
+  try { next = JSON.parse(text.slice(MOVE_TAG.length)); } catch (e) { next = null; }
+  if (!next || !next.settings || !next.sync || !Array.isArray(next.payments)) throw new UserError("The pasted data is incomplete - copy it again in Viper.");
+  state = next;
+  migrate();
+  await save(false);
+  renderAll();
+  toast(`Moved from Viper: ${state.payments.length} sales, ${state.debts.length} Půjčky entries, settings and key`);
+  refreshProducts();
+  trySync();  // changes old Viper couldn't send yet go to the sheet now
+}
+$("#movePaste").onclick = async () => {
+  let text = null;
+  try { text = await navigator.clipboard.readText(); } catch (e) {}
+  if (text && text.trim().startsWith(MOVE_TAG)) return guard(importMove)(text);
+  $("#moveText").style.display = $("#moveImport").style.display = "";
+  $("#moveText").focus();
+  toast(text == null ? "Long-press the box, choose Paste, then tap Import" : "The clipboard has no Viper data - in Viper tap Copy my data first", text != null);
+};
+$("#moveImport").onclick = guard(() => importMove($("#moveText").value));
 
 // Fill in fields that older versions of the app didn't have
 function migrate() {
@@ -1322,7 +1352,7 @@ function watchForUpdates() {
 
 async function showVersion() {
   try {
-    const v = (await caches.keys()).filter(k => /^viper-v\d+$/.test(k)).sort((a, b) => b.slice(7) - a.slice(7))[0];
-    if (v) $("#appVersion").textContent = "App version: Sidewinder " + v.slice(6) + " (updates by itself)";
+    const v = (await caches.keys()).filter(k => /^sidewinder-v\d+$/.test(k)).sort((a, b) => b.slice(12) - a.slice(12))[0];
+    if (v) $("#appVersion").textContent = "App version: Sidewinder " + v.slice(11) + " (updates by itself)";
   } catch (e) {}
 }
